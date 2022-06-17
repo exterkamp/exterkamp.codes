@@ -1,3 +1,14 @@
+/* latin */
+@font-face {
+  font-family: 'Open Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-stretch: 100%;
+  font-display: swap; /* https://web.dev/font-display/ */
+  src: url(https://fonts.gstatic.com/s/opensans/v29/memSYaGs126MiZpBA-UvWbX2vVnXBbObj2OVZyOOSr4dVJWUgsjZ0B4gaVQUwaEQbjA.woff) format('woff');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 html {
     --background-gradient-left: rgba(249,249,255,1);
     --background-gradient-mid: rgba(246,246,255,1);
@@ -22,7 +33,7 @@ main {
     max-width: 45rem;
     min-width: 300px;
     margin: auto;
-/*     font-family: 'Open Sans', sans-serif; */
+    font-family: 'Open Sans', sans-serif;
     color: var(--main-color);
     background-color: var(--main-background-color);
     box-shadow: 0 4px 8px 0 rgba(0,0,0,0.05);
