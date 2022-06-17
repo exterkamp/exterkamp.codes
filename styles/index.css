@@ -87,7 +87,6 @@ a:hover {
     }
 }
 @media only screen and (max-width:600px) {
-     /* Title doesn't break correctly, since the IPA isn't a "word".  */
     #title-break {
         display: inline;
     }
