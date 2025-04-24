@@ -144,12 +144,12 @@
                 if (memTop && memRight) {
                     colorControls.style.top = `${memTop}px`;
                     colorControls.style.right = `${memRight}px`;
-                    colorControls.style.display = "block";
                 }
 
                 top = parseInt(getComputedStyle(colorControls).getPropertyValue("top"), 10);
                 right = parseInt(getComputedStyle(colorControls).getPropertyValue("right"), 10);
 
+                colorControls.style.display = "block";
                 let clickLocation = {
                     x: undefined,
                     y: undefined,
