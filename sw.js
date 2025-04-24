@@ -2,8 +2,8 @@ importScripts('https://storage.googleapis.com/workbox-cdn/releases/3.6.1/workbox
 
 // Precaching html, basic css, and portrait.
 workbox.precaching.precacheAndRoute([
-    { url: '/styles/index.css', revision: 4},
-    { url: '/index.html', revision: 8},
+    { url: '/styles/index.css', revision: 5},
+    { url: '/index.html', revision: 9},
 ]);
 
 // Offline analytics, because why not.
