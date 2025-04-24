@@ -39,6 +39,21 @@ html {
 
     --accent-hue: 240;
     --accent-offset: 0;
+
+    font-family: monospace;
+
+    /* Chevron config. */
+    --chevron-size: 12px;
+    --chevron-angle: 42deg;
+    --chevron-line-stroke: red;
+    --report-line-height: 24px;
+    --chevron-angle: 42deg;
+    /* Edge doesn't support transform: rotate(calc(...)), so we define it here */
+    --chevron-angle-right: -42deg;
+
+    --report-line-height: 0.75rem;
+
+    touch-action: none;
 }
 
 .gradient-background {
@@ -78,17 +93,42 @@ body {
     width: 100vw;
 }
 
+.color-controls details > summary {
+    cursor: pointer;
+}
+
+/* We want to hide the browser's default arrow marker on summary elements. Admittedly, it's complicated. */
+.color-controls details > summary {
+    /* Blink 89+ and Firefox will hide the arrow when display is changed from (new) default of `list-item` to block.  https://chromestatus.com/feature/6730096436051968*/
+    display: block;
+}
+/* Safari and Blink <=88 require using the -webkit-details-marker selector */
+.color-controls details > summary::-webkit-details-marker {
+    display: none;
+}
+
+.color-controls summary {
+    text-align: right;
+}
+
 .color-controls {
     --control-height: 0.25rem;
-    --label-height: 0.5rem;
+    --label-height: 0.75rem;
+    --color-padding: 4px;
 
     position: fixed;
-    top: 0;
-    right: 0;
+    top: var(--color-padding);
+    right: var(--color-padding);
     font-size: var(--label-height);
-    display: flex;
-    flex-direction: row;
-    align-items: center;
+
+    box-shadow: inset 0px 0px 10px 0px oklch(0.2 0.2 var(--accent-hue) / 0.05);
+    border-radius: 4px;
+    backdrop-filter: blur(10px);
+    z-index: 2;
+
+    min-width: 15rem;
+
+    padding: var(--color-padding);
 
     & input[type="range"] {
         -webkit-appearance: none;
@@ -113,6 +153,45 @@ body {
     }
 }
 
+.color-controls .drag {
+    cursor: grab;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+}
+
+/* Chevron
+    https://codepen.io/paulirish/pen/LmzEmK
+*/
+.lh-chevron {
+    width: var(--chevron-size);
+    height: var(--chevron-size);
+}
+
+.lh-chevron__lines {
+    transition: transform 0.4s;
+    transform: translateY(var(--report-line-height));
+}
+.lh-chevron__line {
+    stroke: oklch(0.7 0.17 var(--accent-hue));
+    stroke-width: var(--chevron-size);
+    stroke-linecap: square;
+    transform-origin: 50%;
+    transform: rotate(var(--chevron-angle));
+    transition: transform 300ms, stroke 300ms;
+}
+
+
+.color-controls details[open] .lh-chevron__line-left,
+    .lh-chevron__lines .lh-chevron__line-right {
+ transform: rotate(var(--chevron-angle-right));
+}
+
+.color-controls details[open] .lh-chevron__line-right,
+    .lh-chevron__lines .lh-chevron__line-left {
+  transform: rotate(var(--chevron-angle));
+}
+
 main {
     display: flex;
     justify-content: center;
@@ -121,10 +200,7 @@ main {
     max-width: 45rem;
     min-width: 300px;
     margin: auto;
-    font-family: 'Open Sans', sans-serif;
     color: var(--main-color);
-    background-color: var(--main-background-color);
-    box-shadow: 0 4px 8px 0 rgba(0,0,0,0.05);
     padding: 0 2rem;
 }
 h1 {

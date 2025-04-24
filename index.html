@@ -34,12 +34,30 @@
         <link rel="stylesheet" href="styles/index.css">
     </head>
     <body class="gradient-background">
-        <div>
+        <div class="color-controls" style="display: none;">
             <!-- Color controls. -->
-            <div class="color-controls">
-                <label for="accent">accent</label>
-                <input type="range" id="accent" name="accent" min="0" max="360" />
+            <div class="drag">
+                <svg viewbox="0 0 20 20" width="15" height="15">
+                    <path xmlns="http://www.w3.org/2000/svg" fill="#0002" d="M2 11h16v2H2zm0-4h16v2H2zm8 11l3-3H7l3 3zm0-16L7 5h6l-3-3z"/>
+                </svg>
             </div>
+            <details open>
+                <summary>
+                    <span>control</span>
+                    <!-- Chevrons, based on: https://codepen.io/paulirish/pen/LmzEmK -->
+                    <svg class="lh-chevron" viewbox="0 0 100 100">
+                        <g class="lh-chevron__lines">
+                            <path class="lh-chevron__line lh-chevron__line-left" d="M10 50h40"></path>
+                            <path class="lh-chevron__line lh-chevron__line-right" d="M90 50H50"></path>
+                        </g>
+                    </svg>
+                </summary>
+                <!-- <input class="close" type="checkbox" /> -->
+                <div>
+                    <label for="accent">accent</label>
+                    <input type="range" id="accent" name="accent" min="0" max="360" />
+                </div>
+            </details>
         </div>
         <main>
             <div>
@@ -114,6 +132,72 @@
                     // Save this choice in localStorage.
                     localStorage.setItem("accent-hue", e.srcElement.value);
                 });
+
+                // Set the positions and such for the draggable controls.
+                const colorControls = document.querySelector(".color-controls");
+                // Get the top/right from storage maybe.
+                let top;
+                let right;
+
+                const memTop = localStorage.getItem("control-top");
+                const memRight = localStorage.getItem("control-right");
+                if (memTop && memRight) {
+                    colorControls.style.top = `${memTop}px`;
+                    colorControls.style.right = `${memRight}px`;
+                    colorControls.style.display = "block";
+                }
+
+                top = parseInt(getComputedStyle(colorControls).getPropertyValue("top"), 10);
+                right = parseInt(getComputedStyle(colorControls).getPropertyValue("right"), 10);
+
+                let clickLocation = {
+                    x: undefined,
+                    y: undefined,
+                }
+                let dragPosition = {
+                    x: undefined,
+                    y: undefined,
+                }
+
+                const controlsDrag = document.querySelector(".color-controls .drag");
+                const mouseMoveListener = (e) => {
+                    // Set the tempTop tempRight
+                    e.preventDefault();
+
+                    // calculate the new cursor position:
+                    dragPosition = {
+                        x: e.clientX,
+                        y: e.clientY,
+                    }
+                    // New position:
+                    let newRight = clickLocation.x - dragPosition.x;
+                    let newTop = clickLocation.y - dragPosition.y;
+                    // set the element's new position:
+                    colorControls.style.top = (top - newTop) + "px";
+                    colorControls.style.right = ((right + newRight)) + "px";
+                };
+                controlsDrag.addEventListener("pointerdown", (e) => {
+                    e.preventDefault();
+
+                    // Start tracking and adjusting the position.
+                    clickLocation = {
+                        x: e.clientX,
+                        y: e.clientY,
+                    }
+                    document.addEventListener("pointermove", mouseMoveListener);
+                    document.addEventListener("pointerup", () => {
+                        e.preventDefault();
+                        // Remove the mousemove listener.
+                        document.removeEventListener("pointermove", mouseMoveListener)
+                        // Set the final top/right to be used in the next drag.
+                        top = parseInt(getComputedStyle(colorControls).getPropertyValue("top"), 10);
+                        right = parseInt(getComputedStyle(colorControls).getPropertyValue("right"), 10);
+                        // Also set it in localStorage to be used in the future.
+                        localStorage.setItem("control-top", top);
+                        localStorage.setItem("control-right", right);
+                    });
+                });
+
             }
 
             initializeColorControls();
