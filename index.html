@@ -52,10 +52,13 @@
                         </g>
                     </svg>
                 </summary>
-                <!-- <input class="close" type="checkbox" /> -->
-                <div>
-                    <label for="accent">accent</label>
+                <div class="controls-grid">
+                    <label for="accent">hue</label>
                     <input type="range" id="accent" name="accent" min="0" max="360" />
+                    <label for="lightness">lightness</label>
+                    <input type="range" id="lightness" name="lightness" min="0" max="1" step="0.01" />
+                    <label for="chroma">chroma</label>
+                    <input type="range" id="chroma" name="chroma" min="0" max="1" step="0.01" />         
                 </div>
             </details>
         </div>
@@ -114,6 +117,8 @@
         <script>
             function initializeColorControls() {
                 const colorSlider = document.getElementById("accent");
+                const lightnessSlider = document.getElementById("lightness");
+                const chromaSlider = document.getElementById("chroma");
                 const root = document.querySelector(":root");
 
                 // Check our memory of where the user might have set this before.
@@ -131,6 +136,26 @@
                     root.style.setProperty("--accent-hue", e.srcElement.value);
                     // Save this choice in localStorage.
                     localStorage.setItem("accent-hue", e.srcElement.value);
+                });
+
+                // Set slider to the initial value.
+                lightnessSlider.value = getComputedStyle(lightnessSlider).getPropertyValue("--lightness");
+
+                lightnessSlider.addEventListener("input", (e) => {
+                    // Set the accent property.
+                    root.style.setProperty("--lightness", e.srcElement.value);
+                    // Save this choice in localStorage.
+                    localStorage.setItem("lightness", e.srcElement.value);
+                });
+
+                // Set slider to the initial value.
+                chromaSlider.value = getComputedStyle(chromaSlider).getPropertyValue("--chroma");
+
+                chromaSlider.addEventListener("input", (e) => {
+                    // Set the accent property.
+                    root.style.setProperty("--chroma", e.srcElement.value);
+                    // Save this choice in localStorage.
+                    localStorage.setItem("chroma", e.srcElement.value);
                 });
 
                 // Set the positions and such for the draggable controls.

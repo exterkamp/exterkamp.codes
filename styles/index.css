@@ -15,6 +15,18 @@
     initial-value: 0;
 }
 
+@property --chroma {
+    syntax: "<number>";
+    inherits: true;
+    initial-value: 0;
+}
+
+@property --chroma-offset {
+    syntax: "<number>";
+    inherits: true;
+    initial-value: 0;
+}
+
 @property --accent-hue {
     syntax: "<number>";
     inherits: true;
@@ -39,6 +51,10 @@ html {
 
     --accent-hue: 240;
     --accent-offset: 0;
+    --lightness: 0.93;
+
+    --chrome-offset: 0;
+    --chroma: 0.03;
 
     font-family: monospace;
 
@@ -58,18 +74,27 @@ html {
 
 .gradient-background {
     background-image: linear-gradient(
-        in oklch longer hue to right,
-        oklch(0.93 var(--lightness) var(--accent-hue) / 33%),
-        oklch(0.93 var(--lightness) calc(var(--accent-hue) + var(--accent-offset)) / 33%)
+        in oklch longer hue 217deg,
+        oklch(var(--lightness) calc(var(--chroma) + var(--chroma-offset)) calc(var(--accent-hue) + var(--accent-offset))),
+        oklch(var(--lightness) calc(var(--chroma) + var(--chroma-offset)) calc(var(--accent-hue) + var(--accent-offset)) / 33%)
       ),
       linear-gradient(
-        in oklch longer hue to bottom left,
-        oklch(0.93 var(--lightness) var(--accent-hue) / 33%),
-        oklch(0.93 var(--lightness) calc(var(--accent-hue) + var(--accent-offset)) / 33%)
+        in oklch longer hue 127deg,
+        oklch(var(--lightness) calc(var(--chroma) + var(--chroma-offset)) calc(var(--accent-hue) + var(--accent-offset) + 120)),
+        oklch(var(--lightness) calc(var(--chroma) + var(--chroma-offset)) calc(var(--accent-hue) + var(--accent-offset) + 120) / 33%)
+      ),
+      linear-gradient(
+        in oklch longer hue 336deg,
+        oklch(var(--lightness) calc(var(--chroma) + var(--chroma-offset)) calc(var(--accent-hue) + var(--accent-offset) + 240) / 33%),
+        oklch(var(--lightness) calc(var(--chroma) + var(--chroma-offset)) calc(var(--accent-hue) + var(--accent-offset) + 240) / 33%)
       );
 
+      /* linear-gradient(217deg, rgb(255 0 0 / 80%), rgb(255 0 0 / 0%) 70.71%),
+      linear-gradient(127deg, rgb(0 255 0 / 80%), rgb(0 255 0 / 0%) 70.71%),
+      linear-gradient(336deg, rgb(0 0 255 / 80%), rgb(0 0 255 / 0%) 70.71%); */
+
     animation-name: anim_bg;
-    animation-duration: 2s;
+    animation-duration: 5s;
     animation-direction: alternate;
     animation-timing-function: linear;
     animation-iteration-count: infinite;
@@ -78,12 +103,14 @@ html {
 @keyframes anim_bg {
     0% {
         --accent-offset: 0;
-        --lightness: 0.01;
+        --chroma-offset: 0.01;
+        /* --lightness: 0.93; */
     }
 
     100% {
-        --accent-offset: 10;
-        --lightness: 0.05;
+        --accent-offset: 360;
+        --chroma-offset: 0.05;
+        /* --lightness: 0.93 */
     }
 }
 
@@ -158,6 +185,12 @@ body {
     position: absolute;
     top: 2px;
     left: 2px;
+}
+
+.controls-grid {
+    display: grid;
+    grid-template-columns: min-content 1fr;
+    gap: 2px;
 }
 
 /* Chevron
