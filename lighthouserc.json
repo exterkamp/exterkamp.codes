@@ -3,5 +3,8 @@
     "collect": {
       "staticDistDir": "./"
     }
+  },
+  "assertions": {
+    "uses-http2": "off"
   }
 }
