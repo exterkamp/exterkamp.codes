@@ -1,7 +1,34 @@
+<div class="color-controls" [style.display]="controlsVisible() ? 'block' : 'none'" #colorControls>
+  <div class="drag" (pointerdown)="onDragStart($event)">
+    <svg viewBox="0 0 20 20" width="15" height="15">
+      <path fill="#0002" d="M2 11h16v2H2zm0-4h16v2H2zm8 11l3-3H7l3 3zm0-16L7 5h6l-3-3z" />
+    </svg>
+  </div>
+  <details open>
+    <summary>
+      <span>control</span>
+      <svg class="lh-chevron" viewBox="0 0 100 100">
+        <g class="lh-chevron__lines">
+          <path class="lh-chevron__line lh-chevron__line-left" d="M10 50h40"></path>
+          <path class="lh-chevron__line lh-chevron__line-right" d="M90 50H50"></path>
+        </g>
+      </svg>
+    </summary>
+    <div class="controls-grid">
+      <label for="accent">hue</label>
+      <input type="range" id="accent" name="accent" min="0" max="360" [value]="accentHue()" (input)="onHueChange($event)" />
+      <label for="lightness">lightness</label>
+      <input type="range" id="lightness" name="lightness" min="0" max="1" step="0.01" [value]="lightness()" (input)="onLightnessChange($event)" />
+      <label for="chroma">chroma</label>
+      <input type="range" id="chroma" name="chroma" min="0" max="1" step="0.01" [value]="chroma()" (input)="onChromaChange($event)" />
+    </div>
+  </details>
+</div>
+
 <main>
   <div>
     <h1>
-      Exterkamp<br id="title-break">
+      Shane Exterkamp<br id="title-break">
       <span class="highlight">(/ˈeks.ter.kæmp/)</span>
     </h1>
     <h2>Who am I?</h2>
@@ -15,19 +42,23 @@
   <div>
     <h2>What do I do?</h2>
     <p>
-      I work at Google, on Chrome, focusing on web performance with
+      I work at Google Deepmind on generative AI; I previously worked on
+      <a href="https://fi.google.com/">Google Fi</a> and on Chrome, focusing on web performance with
       <a href="https://github.com/GoogleChrome/lighthouse">Lighthouse</a>
       and <a href="https://developers.google.com/speed/pagespeed/insights/">Pagespeed Insights</a>.
     </p>
-    <h2>(Questionably) Useful Sites</h2>
-    <p><a href="https://benchmark.exterkamp.codes">Lighthouse UltraDumb&reg; benchmark tester.</a></p>
-    <p><a href="https://100.exterkamp.codes">Lighthouse 100/100 score example site.</a></p>
-    <p><a href="https://encode.exterkamp.codes">Text encoding tool.</a></p>
     <h2>Things I've Made/Done</h2>
+    <h3>Websites</h3>
+    <ul>
+      <li><a href="https://benchmark.exterkamp.codes">Lighthouse UltraDumb&reg; benchmark tester.</a></li>
+      <li><a href="https://100.exterkamp.codes">Lighthouse 100/100 score example site.</a></li>
+      <li><a href="https://encode.exterkamp.codes">Text encoding tool.</a></li>
+      <li><a href="https://colors.exterkamp.codes">HTML named colors.</a></li>
+    </ul>
     <h3>Code</h3>
     <ul>
+      <li><a href="https://github.com/exterkamp/Python-Data-Structures">Data Structures in Python</a></li>
       <li><a href="https://github.com/exterkamp/keyboard_firmware">Custom Keyboards and Firmware</a></li>
-      <li><a href="https://github.com/exterkamp/Python-Data-Structures">Lo-Fi Python Data Structures to chill and relax to</a></li>
       <li><a href="https://github.com/AstroTeam/Astro">Astro, a roguelike in space</a></li>
     </ul>
     <footer>✌️&nbsp;<i>{{ currentYear }}</i></footer>
