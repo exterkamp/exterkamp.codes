@@ -1,0 +1,20 @@
+# Local dev stack: frontend + backend, no Cloudflare tunnel.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# cloudflared is already gated behind the `tunnel` profile in
+# docker-compose.yml, so it doesn't need excluding here — this file only adds
+# the one thing dev needs that production intentionally doesn't have: a
+# published port. No IP prefix means it binds every interface, which is what
+# makes it reachable from another device on the LAN or over Tailscale, not
+# just this machine's loopback.
+#
+# 8086: 8080/8081 are nertz (prod/dev), 8083 is web-solitaire, 8085 is the
+# chiptune studio, and 8082 -- despite being what web-solitaire's own compose
+# comment earmarks for exterkamp.codes -- turned out to already be live,
+# running the exterkamp-dot-codes (forklift) experiment. Override DEV_PORT if
+# 8086 is taken too.
+services:
+  frontend:
+    ports:
+      - "${DEV_PORT:-8086}:80"

@@ -10,11 +10,23 @@ Personal site, migrated off GitHub Pages to self-hosted (Angular + FastAPI, Dock
 
 ## Run with Docker
 
+Production (frontend + backend + Cloudflare tunnel):
+
 ```bash
-docker compose up -d --build
+docker compose --profile tunnel up -d --build
 ```
 
-Then open http://localhost:8081
+Local dev (frontend + backend only, no tunnel, reachable from other devices on
+your LAN or Tailscale, not just this machine):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+Then open http://localhost:8086, or from another device, the host's LAN or
+Tailscale IP on the same port (e.g. http://192.168.1.174:8086 or
+http://100.105.102.51:8086). Set `DEV_PORT` if 8086 is taken by something
+else on this host.
 
 ## Local development (without Docker)
 

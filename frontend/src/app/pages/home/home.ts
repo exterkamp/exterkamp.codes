@@ -11,8 +11,6 @@ const DEFAULT_CHROMA = 0.03;
   templateUrl: './home.html',
 })
 export class Home implements AfterViewInit {
-  readonly currentYear = new Date().getFullYear();
-
   private readonly colorControls = viewChild.required<ElementRef<HTMLElement>>('colorControls');
 
   controlsVisible = signal(false);

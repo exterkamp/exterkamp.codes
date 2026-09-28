@@ -5,18 +5,36 @@ services:
 
   frontend:
     build: ./frontend
-    ports:
-      - "8081:80"
+    # Port 8081 unpublished: cloudflared reaches this as http://frontend:80
+    # over the compose network, so no host binding is needed.
     depends_on:
       - backend
     restart: unless-stopped
 
   cloudflared:
     image: cloudflare/cloudflared:latest
+    # Gated behind a profile so a plain `docker compose up` (e.g. the dev
+    # override) doesn't dial out to Cloudflare with the real tunnel token.
+    # Production needs `--profile tunnel` or COMPOSE_PROFILES=tunnel in .env.
+    profiles:
+      - tunnel
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
     depends_on:
       - frontend
     restart: unless-stopped
+    # This tunnel carries more than this site now. Public hostnames that point
+    # at `traefik` need it on the network Traefik is on, or cloudflared cannot
+    # resolve the name and answers 502 - which is what nertz.exterkamp.codes
+    # did until this was added.
+    #
+    # `default` stays first and still reaches frontend:80 as before.
+    networks:
+      - default
+      - proxyhosts
 
 networks:
   default:
+  # Traefik's shared network, created outside this stack.
+  proxyhosts:
+    external: true
+    name: proxyhosts
