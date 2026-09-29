@@ -1,6 +1,16 @@
 # Local dev stack: frontend + backend, no Cloudflare tunnel.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#   docker compose -p exterkamp-codes-site-dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# The -p is not optional. Without it this stack's `frontend` container lands
+# in the same project (and the same default network) as the real one
+# docker-compose.yml's cloudflared points at — meaning every dev rebuild
+# silently replaces whatever old.exterkamp.codes was serving live. That
+# happened twice before this comment existed: once with a holding page, once
+# with a bare "Hello, world". -p gives dev its own project name and its own
+# default network, so it cannot collide with cloudflared's no matter what
+# gets rebuilt here. See "A development stack" in web-nert/development.md
+# for the fuller version of this same problem.
 #
 # cloudflared is already gated behind the `tunnel` profile in
 # docker-compose.yml, so it doesn't need excluding here — this file only adds

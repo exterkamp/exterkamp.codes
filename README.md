@@ -20,8 +20,12 @@ Local dev (frontend + backend only, no tunnel, reachable from other devices on
 your LAN or Tailscale, not just this machine):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+docker compose -p exterkamp-codes-site-dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
+
+The `-p` isn't optional — it puts this stack in its own project/network so it
+can never collide with the container the real tunnel forwards to. See the
+comment at the top of `docker-compose.dev.yml`.
 
 Then open http://localhost:8086, or from another device, the host's LAN or
 Tailscale IP on the same port (e.g. http://192.168.1.174:8086 or
