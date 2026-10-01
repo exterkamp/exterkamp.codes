@@ -17,6 +17,7 @@ MAX_NOTES_RETURNED = 500
 RATE_LIMIT_POSTS = 5
 RATE_LIMIT_WINDOW = 60.0
 
+
 def db_path() -> str:
     return os.environ.get("NOTES_DB", "/data/notes.db")
 
@@ -70,13 +71,16 @@ def seed_demo_notes() -> None:
         return
     now = datetime.now(timezone.utc)
     with closing(connect()) as conn, conn:
+        # Take the write lock before checking, so two workers can't both see an empty table.
+        conn.execute("BEGIN IMMEDIATE")
         if conn.execute("SELECT 1 FROM notes LIMIT 1").fetchone():
             return
         conn.executemany(
             "INSERT INTO notes (lat, lon, text, created_at) VALUES (?, ?, ?, ?)",
             [
                 (lat, lon, text, (now - timedelta(days=days)).isoformat(timespec="seconds"))
-                for lat, lon, text, days in DEMO_NOTES
+                # Oldest first, so ids (and /api/notes order) follow created_at like real posts.
+                for lat, lon, text, days in sorted(DEMO_NOTES, key=lambda n: -n[3])
             ],
         )
 

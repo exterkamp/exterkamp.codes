@@ -121,6 +121,25 @@ def test_seeds_when_empty_and_flagged(tmp_path, monkeypatch):
     assert 28 <= len(notes) <= 32
     assert any(n["lat"] < -60 for n in notes)  # Antarctica
     assert any(n["lon"] > 170 for n in notes) and any(n["lon"] < -170 for n in notes)
+    # Every continent has at least one note (rough lat/lon boxes).
+    continents = {
+        "north america": (15, 72, -170, -50),
+        "south america": (-56, 12, -82, -34),
+        "europe": (36, 71, -25, 40),
+        "africa": (-35, 37, -18, 52),
+        "asia": (1, 75, 60, 150),
+        "oceania": (-47, -10, 110, 180),
+    }
+    for name, (lat0, lat1, lon0, lon1) in continents.items():
+        assert any(lat0 <= n["lat"] <= lat1 and lon0 <= n["lon"] <= lon1 for n in notes), name
+    # At least one pair of notes sits within ~0.1 degrees of each other.
+    assert any(
+        abs(a["lat"] - b["lat"]) < 0.1 and abs(a["lon"] - b["lon"]) < 0.1
+        for i, a in enumerate(notes)
+        for b in notes[i + 1 :]
+    )
+    # Ids follow creation order, like real posts.
+    assert [n["created_at"] for n in notes] == sorted(n["created_at"] for n in notes)
 
 
 def test_does_not_seed_without_flag(tmp_path, monkeypatch):
