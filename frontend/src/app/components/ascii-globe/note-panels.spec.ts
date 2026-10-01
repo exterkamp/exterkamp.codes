@@ -2,18 +2,22 @@ import { describe, expect, it } from 'vitest';
 import {
   assignSlots,
   cellCenter,
-  DISC_OVERLAP,
+  LANE_HYSTERESIS,
+  LANES,
+  laneFor,
+  layoutLanes,
+  MAX_LINE,
+  MAX_STEP_X,
   advancePanels,
   easeRect,
   PanelState,
-  layoutPanels,
+  placementRank,
   nearestEdgePoint,
   nearestInZone,
   PANEL_GAP,
   PANEL_MAX_SPEED,
   PANEL_TAU,
   pinPoint,
-  placePanels,
   Rect,
   Slots,
   ZONE_DEGREES,
@@ -76,130 +80,77 @@ describe('assignSlots', () => {
   });
 });
 
-describe('placePanels', () => {
+describe('laneFor', () => {
+  it('puts a latitude in the lane whose band holds it', () => {
+    expect(LANES.map((l) => l.name)).toEqual(['north', 'middle', 'south']);
+    expect([80, 30.1, 30].map((lat) => laneFor(lat))).toEqual([0, 0, 0]);
+    expect([29.9, 0, -29.9, -30].map((lat) => laneFor(lat))).toEqual([1, 1, 1, 1]);
+    expect([-30.1, -90].map((lat) => laneFor(lat))).toEqual([2, 2]);
+  });
+
+  it('keeps the previous lane within the hysteresis of its band, and lets go beyond it', () => {
+    expect(laneFor(27, 0)).toBe(0);
+    expect(laneFor(30 - LANE_HYSTERESIS - 0.1, 0)).toBe(1);
+    expect(laneFor(32, 1)).toBe(1);
+    expect(laneFor(30 + LANE_HYSTERESIS + 0.1, 1)).toBe(0);
+    expect(laneFor(-33, 1)).toBe(1);
+    expect(laneFor(-36, 1)).toBe(2);
+  });
+});
+
+describe('layoutLanes', () => {
   const size = { width: 100, height: 40 };
-  const bounds = { width: 400, height: 300 };
+  const tops = [10, 110, 210];
+  const bounds = { width: 700 };
+  const one = (x: number, y: number, lat: number) => ({ pin: { x, y }, size, lat });
 
-  it('puts the panel to the right of its marker, centered vertically', () => {
-    const [r] = placePanels([{ x: 100, y: 150 }], [size], bounds, 10);
-    expect(r).toEqual({ ...size, left: 110, top: 130 });
+  it('puts each panel at its lane height, PANEL_GAP to the right of its pin', () => {
+    const [n, m, s] = layoutLanes([one(300, 60, 60), one(300, 130, 0), one(300, 250, -60)], tops, bounds);
+    expect([n.rect.top, m.rect.top, s.rect.top]).toEqual(tops);
+    expect(n.rect.left).toBe(300 + PANEL_GAP);
+    expect(n.lane).toBe(0);
   });
 
-  it('flips to the left when there is no room on the right', () => {
-    const [r] = placePanels([{ x: 350, y: 150 }], [size], bounds, 10);
-    expect(r).toEqual({ ...size, left: 240, top: 130 });
+  it('keeps its side while that side has room, and switches only when it has none', () => {
+    const state = (side: 1 | -1) => [{ home: 1, lane: 1, side }];
+    expect(layoutLanes([one(300, 130, 0)], tops, bounds, state(-1))[0].rect.left).toBe(300 - PANEL_GAP - 100);
+    expect(layoutLanes([one(300, 130, 0)], tops, bounds, state(1))[0].rect.left).toBe(328);
+    expect(layoutLanes([one(650, 130, 0)], tops, bounds, state(1))[0].side).toBe(-1);
+    expect(layoutLanes([one(50, 130, 0)], tops, bounds, state(-1))[0].side).toBe(1);
+    expect(layoutLanes([one(650, 130, 0)], tops, bounds)[0].side).toBe(-1);
   });
 
-  it('goes above or below when neither side has room', () => {
-    const narrow = { width: 120, height: 300 };
-    const [r] = placePanels([{ x: 60, y: 150 }], [size], narrow, 10);
-    expect(r.top + r.height).toBeLessThanOrEqual(140);
-    expect(r.left).toBeGreaterThanOrEqual(0);
-    expect(r.left + r.width).toBeLessThanOrEqual(120);
+  it('puts two panels in one lane on either side of their pins when they do not overlap', () => {
+    const [a, b] = layoutLanes([one(100, 130, 0), one(400, 130, 5)], tops, bounds);
+    expect([a.lane, b.lane]).toEqual([1, 1]);
   });
 
-  it('clamps inside the bounds', () => {
-    const [r] = placePanels([{ x: 20, y: 5 }], [size], bounds, 10);
-    expect(r.top).toBe(0);
-    for (const m of [{ x: 0, y: 0 }, { x: 400, y: 300 }]) {
-      const [c] = placePanels([m], [size], bounds, 10);
-      expect(c.left).toBeGreaterThanOrEqual(0);
-      expect(c.top).toBeGreaterThanOrEqual(0);
-      expect(c.left + c.width).toBeLessThanOrEqual(400);
-      expect(c.top + c.height).toBeLessThanOrEqual(300);
-    }
+  it('moves a panel that would overlap another to the neighboring lane', () => {
+    const [a, b] = layoutLanes([one(300, 130, 0), one(340, 200, 5)], tops, bounds, [undefined, { side: 1 as const }]);
+    expect(a.lane).toBe(1);
+    expect(b.home).toBe(1);
+    expect(b.lane).not.toBe(1);
+    expect(Math.abs(b.lane - 1)).toBe(1);
   });
 
-  it('never covers its own marker', () => {
-    const m = { x: 200, y: 150 };
-    const [r] = placePanels([m], [size], bounds, 10);
-    expect(m.x < r.left || m.x > r.left + r.width || m.y < r.top || m.y > r.top + r.height).toBe(true);
+  it('keeps the neighbor lane until home has room to spare, then goes home', () => {
+    const state = [undefined, { home: 1, lane: 0, side: 1 as const, since: -10 }];
+    const crowded = layoutLanes([one(300, 130, 0), one(340, 100, 0)], tops, bounds, state);
+    expect(crowded[1].lane).toBe(0);
+    const clear = layoutLanes([one(300, 130, 0), one(500, 100, 0)], tops, bounds, state);
+    expect(clear[1].lane).toBe(1);
   });
 
-  it('keeps panels from overlapping when markers are close together', () => {
-    const markers = [{ x: 150, y: 140 }, { x: 160, y: 150 }, { x: 170, y: 160 }];
-    const rects = placePanels(markers, [size, size, size], bounds, 10);
-    for (let i = 0; i < rects.length; i++) {
-      for (let j = i + 1; j < rects.length; j++) {
-        const a = rects[i];
-        const b = rects[j];
-        const apart =
-          a.left + a.width <= b.left || b.left + b.width <= a.left || a.top + a.height <= b.top || b.top + b.height <= a.top;
-        expect(apart).toBe(true);
-      }
-    }
-  });
-});
-
-describe('placePanels on a narrow stage', () => {
-  it('stacks 3 panels without overlap when their markers are close together', () => {
-    const size = { width: 190, height: 50 };
-    const markers = [{ x: 250, y: 150 }, { x: 190, y: 170 }, { x: 175, y: 190 }];
-    const rects = placePanels(markers, [size, size, size], { width: 358, height: 380 });
-    for (let i = 0; i < 3; i++) {
-      for (let j = i + 1; j < 3; j++) {
-        const [a, b] = [rects[i], rects[j]];
-        expect(a.top + a.height <= b.top || b.top + b.height <= a.top || a.left + a.width <= b.left || b.left + b.width <= a.left).toBe(true);
-      }
-    }
-  });
-});
-
-describe('placePanels with markers in a row', () => {
-  const size = { width: 100, height: 30 };
-  const bounds = { width: 400, height: 300 };
-  const coversAny = (markers: { x: number; y: number }[]) => {
-    const rects = placePanels(markers, markers.map(() => size), bounds);
-    return rects.some((r, i) =>
-      markers.some((m, j) => i !== j && m.x >= r.left && m.x <= r.left + r.width && m.y >= r.top && m.y <= r.top + r.height),
-    );
-  };
-
-  it('never puts a panel on a later marker', () => {
-    expect(coversAny([{ x: 100, y: 100 }, { x: 150, y: 100 }])).toBe(false);
+  it('never puts a panel on any shown pin, nor a line under another panel', () => {
+    // The second pin sits where the first panel would be.
+    const [a, b] = layoutLanes([one(300, 130, 0), one(350, 130, 0)], tops, bounds);
+    for (const [r, pins] of [[a.rect, [{ x: 300, y: 130 }, { x: 350, y: 130 }]], [b.rect, [{ x: 300, y: 130 }, { x: 350, y: 130 }]]] as const)
+      for (const p of pins) expect(p.x >= r.left && p.x <= r.left + r.width && p.y >= r.top && p.y <= r.top + r.height).toBe(false);
   });
 
-  it('never puts a panel on any marker of three in a row', () => {
-    expect(coversAny([{ x: 100, y: 100 }, { x: 150, y: 100 }, { x: 200, y: 100 }])).toBe(false);
-  });
-});
-
-describe('placePanels in a tight stage', () => {
-  it('moves above or below rather than cover its own marker when both sides are clamped onto it', () => {
-    const m = { x: 100, y: 150 };
-    const [r] = placePanels([m], [{ width: 100, height: 40 }], { width: 120, height: 300 }, 14);
-    expect(m.x >= r.left && m.x <= r.left + r.width && m.y >= r.top && m.y <= r.top + r.height).toBe(false);
-  });
-});
-
-describe('placePanels around the globe', () => {
-  const size = { width: 100, height: 40 };
-  const bounds = { width: 600, height: 400 };
-  const disc = { x: 300, y: 200, r: 150 };
-
-  it('puts a panel outside the globe, or barely over it', () => {
-    for (const m of [{ x: 300, y: 200 }, { x: 250, y: 150 }, { x: 380, y: 230 }, { x: 330, y: 120 }]) {
-      const [r] = placePanels([m], [size], bounds, 14, disc);
-      const cx = Math.max(r.left, Math.min(disc.x, r.left + r.width));
-      const cy = Math.max(r.top, Math.min(disc.y, r.top + r.height));
-      expect(disc.r - Math.hypot(cx - disc.x, cy - disc.y)).toBeLessThanOrEqual(DISC_OVERLAP + 0.5);
-    }
-  });
-
-  it('keeps one panel off the marker and line of another', () => {
-    const markers = [{ x: 330, y: 200 }, { x: 345, y: 215 }, { x: 320, y: 185 }];
-    const rects = placePanels(markers, [size, size, size], bounds, 14, disc);
-    rects.forEach((r, i) => {
-      markers.forEach((m, j) => {
-        if (i === j) return;
-        const from = nearestEdgePoint(rects[j], m);
-        const hit = Array.from({ length: 17 }, (_, t) => ({
-          x: from.x + ((m.x - from.x) * t) / 16,
-          y: from.y + ((m.y - from.y) * t) / 16,
-        })).some((p) => p.x >= r.left && p.x <= r.left + r.width && p.y >= r.top && p.y <= r.top + r.height);
-        expect(hit).toBe(false);
-      });
-    });
+  it('sends a panel to a lane that keeps its line short', () => {
+    const [p] = layoutLanes([one(300, 330, 0)], tops, bounds);
+    expect(p.lane).toBe(2);
   });
 });
 
@@ -220,9 +171,15 @@ describe('cellCenter', () => {
 });
 
 describe('panel constants', () => {
-  it('keeps panels about 28px from their pins and barely over the globe', () => {
+  it('keeps panels about 28px from their pins', () => {
     expect(PANEL_GAP).toBe(28);
-    expect(DISC_OVERLAP).toBe(4);
+  });
+
+  it('has lanes ordered north to south, with room for a panel between each pair of tops', () => {
+    for (let i = 1; i < LANES.length; i++) {
+      expect(LANES[i].minLat).toBeLessThan(LANES[i - 1].minLat);
+      expect(LANES[i].top).toBeGreaterThan(LANES[i - 1].top);
+    }
   });
 });
 
@@ -251,7 +208,7 @@ describe('easeRect', () => {
 
   it('keeps up with a target moving steadily far faster than PANEL_MAX_SPEED', () => {
     const fps = 60;
-    const speed = 400;
+    const speed = 800;
     let r = at(0, 0);
     let target = at(0, 0);
     let worst = 0;
@@ -272,7 +229,7 @@ describe('easeRect', () => {
   it('never moves faster than PANEL_MAX_SPEED, however far it has to go', () => {
     const r = easeRect(at(0, 0), at(500, 500), 1 / 60);
     expect(Math.hypot(r.left, r.top)).toBeLessThanOrEqual(PANEL_MAX_SPEED / 60 + 1e-9);
-    expect(PANEL_MAX_SPEED / 60).toBeLessThanOrEqual(3);
+    expect(PANEL_MAX_SPEED / 60).toBeLessThanOrEqual(6);
   });
 });
 
@@ -282,7 +239,7 @@ describe('advancePanels', () => {
 
   it('sits on the target with snap, and glides without it', () => {
     expect(advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'a' }], 0.016, true).get(1)!.rect.left).toBe(100);
-    expect(advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'b' }], 0.016).get(1)!.rect.left).toBeLessThan(5);
+    expect(advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'b' }], 0.016).get(1)!.rect.left).toBeLessThan(8);
   });
 
   it('lets a panel follow its target, but not jump when its spot changes', () => {
@@ -315,96 +272,134 @@ const DEMO: [number, number][] = [
   [64.4, -179.9], [-77.85, 166.67], [-90, 0], [-67.6, 62.87],
 ];
 
+/** Panel texts as in backend/app/demo_notes.py; only their lengths matter. */
+const DEMO_TEXT = DEMO.map((_, i) => 'x'.repeat(30 + ((i * 7) % 18)));
+
+type Frame = { id: number; rect: Rect; target: Rect; pin: { x: number; y: number }; lane: number; key: string; first: boolean };
+
 /** Runs the panel pipeline (as the component does) over one full turn of the globe, frame by frame. */
-function simulate(box: { left: number; top: number; width: number; height: number }, stage: { width: number; height: number }, fps = 60) {
-  const notes = DEMO.map(([lat, lon], i) => note(i + 1, lon, lat));
+function simulate(box: { left: number; top: number; width: number; height: number }, stage: { width: number }, panelMaxWidth: number, fps = 60) {
+  const notes = DEMO.map(([lat, lon], i) => ({ ...note(i + 1, lon, lat), text: DEMO_TEXT[i] }));
   const tilt = (23.4 * Math.PI) / 180;
-  const size = { width: 150, height: 56 };
-  const disc = { x: box.left + box.width / 2, y: box.top + box.height / 2, r: Math.min(box.width, box.height) / 2 };
+  const sizeOf = (n: Note) => {
+    const perLine = Math.floor((panelMaxWidth - 22) / 7.5);
+    const lines = Math.ceil(n.text.length / perLine);
+    return { width: Math.min(panelMaxWidth, 22 + Math.min(n.text.length, perLine) * 7.5), height: 18 + lines * 20 };
+  };
+  const laneTops = LANES.map((l) => box.top + l.top * box.height);
   let slots: Slots = [null, null, null];
   let state = new Map<number, PanelState>();
-  const frames: { id: number; rect: Rect; target: Rect; pin: { x: number; y: number }; first: boolean }[][] = [];
+  const cooling = new Map<number, number>();
+  const frames: Frame[][] = [];
   for (let f = 0; f < fps * 30; f++) {
     const angle = (f / (fps * 30)) * 2 * Math.PI;
-    slots = assignSlots(slots, nearestInZone(notes, angle, tilt, slots));
+    slots = assignSlots(slots, nearestInZone(notes.filter((n) => (cooling.get(n.id) ?? 0) <= f), angle, tilt, slots));
     // Panels already showing are placed first, as the component does.
-    const shown = slots.filter((n): n is Note => !!n).sort((a, b) => Number(state.has(b.id)) - Number(state.has(a.id)));
+    const shown = slots.filter((n): n is Note => !!n).sort((a, b) => placementRank(state, a.id) - placementRank(state, b.id));
     const pins = shown.map((n) => pinPoint(project(n, angle, tilt), box));
-    const targets = layoutPanels(pins, shown.map(() => size), stage, PANEL_GAP, disc, shown.map((n) => state.get(n.id)?.key));
+    const targets = layoutLanes(
+      shown.map((n, i) => ({ pin: pins[i], size: sizeOf(n), lat: n.lat })),
+      laneTops,
+      stage,
+      shown.map((n) => state.get(n.id)),
+      PANEL_GAP,
+      f / fps,
+    );
+    // A panel with no clear spot is dropped, as in the component, and tried again after a moment.
+    shown.forEach((n, i) => {
+      if (!targets[i].blocked) return;
+      cooling.set(n.id, f + 0.4 * fps);
+      slots = slots.map((s) => (s === n ? null : s));
+    });
     const next = advancePanels(state, shown.map((n) => n.id), targets, 1 / fps);
     frames.push(
-      shown.map((n, i) => ({ id: n.id, rect: next.get(n.id)!.rect, target: targets[i].rect, pin: pins[i], first: !state.has(n.id) })),
+      shown.flatMap((n, i) => targets[i].blocked ? [] : [{ id: n.id, rect: next.get(n.id)!.rect, target: targets[i].rect, pin: pins[i], lane: targets[i].lane, key: targets[i].key, first: !state.has(n.id) }]),
     );
     state = next;
   }
-  return { frames, disc };
+  return { frames, laneTops };
 }
 
-describe('panels over a full rotation of the demo notes', () => {
-  const box = { left: 167, top: 20, width: 366, height: 370 };
-  const stage = { width: 700, height: 410 };
+const contains = (r: Rect, p: { x: number; y: number }) => p.x >= r.left && p.x <= r.left + r.width && p.y >= r.top && p.y <= r.top + r.height;
+const apart = (r: Rect, o: Rect) =>
+  r.left + r.width <= o.left || o.left + o.width <= r.left || r.top + r.height <= o.top || o.top + o.height <= r.top;
 
-  it('never move more than a few pixels between frames, apart from first appearing', () => {
-    const { frames } = simulate(box, stage);
-    const last = new Map<number, Rect>();
-    let worst = 0;
-    let moves = 0;
-    for (const frame of frames) {
-      const seen = new Map<number, Rect>();
-      for (const { id, rect, first } of frame) {
-        const before = last.get(id);
-        if (before && !first) {
-          worst = Math.max(worst, Math.abs(rect.top - before.top));
-          moves++;
-        }
-        seen.set(id, rect);
-      }
-      last.clear();
-      seen.forEach((r, id) => last.set(id, r));
+/** Per-frame step of every panel that stays shown (not counting the frame it appears), split by whether its lane and side held. */
+function steps(frames: Frame[][]) {
+  const last = new Map<number, Frame>();
+  const out: { dx: number; dy: number; kept: boolean; settled: boolean }[] = [];
+  for (const frame of frames) {
+    const seen = new Map<number, Frame>();
+    for (const f of frame) {
+      const before = last.get(f.id);
+      if (before && !f.first) out.push({ dx: Math.abs(f.rect.left - before.rect.left), dy: Math.abs(f.rect.top - before.rect.top), kept: before.key === f.key, settled: before.rect.top === before.target.top });
+      seen.set(f.id, f);
     }
-    expect(moves).toBeGreaterThan(100);
-    expect(worst).toBeLessThanOrEqual(3);
+    last.clear();
+    seen.forEach((f, id) => last.set(id, f));
+  }
+  return out;
+}
+
+describe.each([
+  ['1024px', { left: 131, top: 0, width: 441, height: 444 }, { width: 704 }, 192],
+  ['390px', { left: 9, top: 0, width: 340, height: 342 }, { width: 358 }, 143],
+])('panels over a full rotation of the demo notes at %s', (_name, box, stage, maxWidth) => {
+  const { frames, laneTops } = simulate(box, stage, maxWidth);
+
+  it('keep their lane height, and never move vertically while in one lane', () => {
+    const all = steps(frames);
+    expect(all.length).toBeGreaterThan(100);
+    for (const f of frames.flat()) expect(laneTops).toContain(f.target.top);
+    for (const s of all.filter((s) => s.kept && s.settled)) expect(s.dy).toBe(0);
   });
 
-  const apart = (r: Rect, o: Rect) =>
-    r.left + r.width <= o.left || o.left + o.width <= r.left || r.top + r.height <= o.top || o.top + o.height <= r.top;
-  const reach = (r: Rect, d: { x: number; y: number; r: number }) =>
-    d.r - Math.hypot(Math.max(r.left, Math.min(d.x, r.left + r.width)) - d.x, Math.max(r.top, Math.min(d.y, r.top + r.height)) - d.y);
+  it('never move more than MAX_STEP_X in a frame, or jump more than 40px, apart from first appearing', () => {
+    for (const s of steps(frames)) {
+      expect(s.dx).toBeLessThanOrEqual(MAX_STEP_X);
+      expect(Math.hypot(s.dx, s.dy)).toBeLessThanOrEqual(40);
+    }
+  });
 
-  it('aim at spots that keep clear of each other and their pins, and barely touch the globe', () => {
-    const { frames, disc } = simulate(box, stage);
+  it('glide to another lane or side at no more than a few pixels a frame', () => {
+    for (const s of steps(frames).filter((s) => !s.kept)) expect(Math.hypot(s.dx, s.dy)).toBeLessThanOrEqual(PANEL_MAX_SPEED / 60 + MAX_STEP_X);
+  });
+
+  it('change lane rarely', () => {
+    const changes = steps(frames).filter((s) => !s.kept).length;
+    expect(changes / frames.flat().length).toBeLessThan(0.1);
+  });
+
+  it('stay within MAX_LINE of their pins', () => {
+    for (const f of frames.flat()) {
+      const edge = nearestEdgePoint(f.target, f.pin);
+      expect(Math.hypot(edge.x - f.pin.x, edge.y - f.pin.y)).toBeLessThanOrEqual(MAX_LINE);
+    }
+  });
+
+  it('aim at spots inside the stage that clear every shown pin and each other', () => {
     for (const frame of frames) {
-      frame.forEach(({ target: t, pin }, i) => {
-        expect(pin.x >= t.left && pin.x <= t.left + t.width && pin.y >= t.top && pin.y <= t.top + t.height).toBe(false);
-        expect(t.left).toBeGreaterThanOrEqual(0);
-        expect(t.left + t.width).toBeLessThanOrEqual(stage.width);
-        expect(reach(t, disc)).toBeLessThanOrEqual(DISC_OVERLAP + 0.5);
-        for (const { target: o } of frame.slice(i + 1)) expect(apart(t, o)).toBe(true);
+      frame.forEach((f, i) => {
+        expect(f.target.left).toBeGreaterThanOrEqual(0);
+        expect(f.target.left + f.target.width).toBeLessThanOrEqual(stage.width);
+        for (const o of frame) expect(contains(f.target, o.pin)).toBe(false);
+        for (const o of frame.slice(i + 1)) expect(apart(f.target, o.target)).toBe(true);
       });
     }
   });
 
-  it('only cross paths while gliding to a new spot', () => {
-    const { frames } = simulate(box, stage);
-    const crossing = frames.filter((f) => f.some(({ rect: r }, i) => f.slice(i + 1).some(({ rect: o }) => !apart(r, o))));
-    // Seconds-long glides only happen when a crowd of three pins forces a panel to the far side of the globe.
-    expect(crossing.length / frames.length).toBeLessThan(0.13);
+  it('only cross paths or pass over their own pins while gliding to a new lane or side', () => {
+    const rects = frames.filter((f) => f.some((a, i) => f.slice(i + 1).some((b) => !apart(a.rect, b.rect))));
+    const own = frames.filter((f) => f.some((a) => contains(a.rect, a.pin)));
+    expect(rects.length / frames.length).toBeLessThan(0.15);
+    expect(own.length / frames.length).toBeLessThan(0.15);
   });
+});
 
-  it('rarely pass over their own pins while gliding', () => {
-    const { frames } = simulate(box, stage);
-    const covering = frames.filter((f) =>
-      f.some(({ rect: r, pin }) => pin.x >= r.left && pin.x <= r.left + r.width && pin.y >= r.top && pin.y <= r.top + r.height),
-    );
-    // Only when a crowd of three pins forces a panel to the far side of the globe, which takes seconds at the speed limit.
-    expect(covering.length / frames.length).toBeLessThan(0.04);
-    // And never for long at a time: no single episode of covering lasts more than a second (the longest measured is 0.67s).
-    let run = 0;
-    let longest = 0;
-    for (const f of frames) {
-      run = f.some(({ rect: r, pin }) => pin.x >= r.left && pin.x <= r.left + r.width && pin.y >= r.top && pin.y <= r.top + r.height) ? run + 1 : 0;
-      longest = Math.max(longest, run);
-    }
-    expect(longest).toBeLessThanOrEqual(60);
+describe('panels with reduced motion', () => {
+  it('sit exactly on their targets', () => {
+    const prev = new Map<number, PanelState>([[1, { rect: { left: 0, top: 0, width: 10, height: 10 }, target: { left: 0, top: 0, width: 10, height: 10 }, key: '1:1' }]]);
+    const rect = { left: 90, top: 5, width: 10, height: 10 };
+    expect(advancePanels(prev, [1], [{ rect, key: '1:1' }], 0.016, true).get(1)!.rect).toEqual(rect);
   });
 });
