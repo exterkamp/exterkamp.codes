@@ -12,8 +12,10 @@ describe('AsciiGlobe', () => {
 
   describe('dragging', () => {
     let pre: HTMLPreElement;
-    const fire = (type: string, init: MouseEventInit & { target?: EventTarget } = {}) =>
-      (init.target ?? pre).dispatchEvent(new MouseEvent(type, { bubbles: true, buttons: 1, ...init }));
+    // Real PointerEvents with a numeric pointerId, like a browser sends, so the
+    // pointerId filtering in the component is actually exercised.
+    const fire = (type: string, init: PointerEventInit & { target?: EventTarget } = {}) =>
+      (init.target ?? pre).dispatchEvent(new PointerEvent(type, { pointerId: 1, bubbles: true, buttons: 1, ...init }));
 
     beforeEach(async () => {
       const fixture = TestBed.createComponent(AsciiGlobe);
@@ -32,6 +34,22 @@ describe('AsciiGlobe', () => {
       fire('pointerup', { clientX: 30 });
       fire('pointermove', { clientX: 60 });
       expect(pre.textContent).toBe(dragged);
+    });
+
+    it('ignores other pointers while dragging (e.g. a second finger)', () => {
+      fire('pointerdown', { clientX: 0 });
+      const before = pre.textContent;
+
+      fire('pointermove', { pointerId: 2, clientX: 60 });
+      expect(pre.textContent).toBe(before);
+
+      fire('pointerup', { pointerId: 2, target: window });
+      fire('pointercancel', { pointerId: 2, target: window });
+      expect(pre.classList).toContain('dragging');
+
+      fire('pointerdown', { pointerId: 2, clientX: 0 }); // can't start a second drag
+      fire('pointerup', { pointerId: 1, target: window });
+      expect(pre.classList).not.toContain('dragging');
     });
 
     it('ends the drag when released outside the globe', () => {

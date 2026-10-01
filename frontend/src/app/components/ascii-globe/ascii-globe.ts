@@ -83,9 +83,6 @@ export class AsciiGlobe {
         for (const [target, type, fn] of listeners) target.removeEventListener(type, fn);
       });
 
-      // Reduced motion: no auto-spin, but the user can still turn it by hand.
-      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-
       let frame = 0;
       let last = 0;
 
@@ -109,15 +106,30 @@ export class AsciiGlobe {
         frame = 0;
       };
 
-      // Only animate while the globe is on screen.
+      // Auto-spin only while the globe is on screen and the user hasn't asked for reduced
+      // motion. With reduced motion the user can still turn it by hand. Both inputs can
+      // change while the page is open, so react to each.
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+      let onScreen = true;
+      const update = () => {
+        if (onScreen && !reducedMotion?.matches) {
+          start();
+        } else {
+          stop();
+        }
+      };
+
       const observer = new IntersectionObserver(([entry]) => {
-        entry.isIntersecting ? start() : stop();
+        onScreen = entry.isIntersecting;
+        update();
       });
       observer.observe(el);
-      start();
+      reducedMotion?.addEventListener('change', update);
+      update();
 
       destroyRef.onDestroy(() => {
         observer.disconnect();
+        reducedMotion?.removeEventListener('change', update);
         stop();
       });
     });

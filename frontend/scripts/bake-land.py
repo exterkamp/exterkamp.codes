@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Rasterize Natural Earth 110m land polygons into a 1-bit equirectangular bitmap.
 
+Requires Pillow (pip install pillow).
 Usage: python3 scripts/bake-land.py [land.geojson]
 
-Source: https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson
+Source: ne_110m_land.geojson, pinned to a natural-earth-vector commit (see URL below) so
+re-running produces the same output.
 Output: src/app/components/ascii-globe/land-data.ts (base64, row-major, MSB first)
 """
 import base64
@@ -14,7 +16,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson"
+SOURCE_COMMIT = "ca96624a56bd078437bca8184e78163e5039ad19"
+URL = f"https://raw.githubusercontent.com/nvkelso/natural-earth-vector/{SOURCE_COMMIT}/geojson/ne_110m_land.geojson"
 WIDTH, HEIGHT = 360, 180  # 1 degree per cell
 OUT = Path(__file__).resolve().parent.parent / "src/app/components/ascii-globe/land-data.ts"
 
@@ -51,4 +54,5 @@ def main():
     print(f"wrote {OUT} ({len(packed)} chars, {land}/{WIDTH * HEIGHT} land cells)")
 
 
-main()
+if __name__ == "__main__":
+    main()

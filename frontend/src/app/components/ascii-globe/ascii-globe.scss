@@ -2,14 +2,22 @@
   display: flex;
   justify-content: center;
   margin: 2rem 0;
+  // Side gutter so the globe never touches the viewport edge.
+  padding: 0 1rem;
 }
 
 .globe {
   margin: 0;
   font-family: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
-  font-size: 12px;
+  // The grid is 61 character cells wide, and a monospace cell is ~0.6em wide, so it
+  // measures ~36.75em. Shrink the font on narrow viewports so the whole globe fits
+  // (viewport minus the 1rem gutters above and the default 8px body margins) instead
+  // of being clipped.
+  font-size: min(12px, calc((100vw - 3rem) / 37));
   line-height: 1;
   color: rgb(241, 16, 16);
+  // Keep the grid on fixed rows and columns.
+  white-space: pre;
   user-select: none;
   cursor: grab;
   // Horizontal drags turn the globe; vertical drags still scroll the page on touch.
@@ -18,8 +26,4 @@
   &.dragging {
     cursor: grabbing;
   }
-  // Don't let a narrow viewport squash or wrap the grid.
-  white-space: pre;
-  overflow: hidden;
-  max-width: 100%;
 }

@@ -23,7 +23,7 @@ const AMBIENT = 0.3;
 
 export const bitmapLand: Land = (() => {
   const raw = atob(LAND_BITS);
-  const rowBytes = LAND_WIDTH / 8;
+  const rowBytes = Math.ceil(LAND_WIDTH / 8);
   return {
     isLand(lat, lon) {
       const col = Math.floor(((lon + Math.PI) / (2 * Math.PI)) * LAND_WIDTH);
