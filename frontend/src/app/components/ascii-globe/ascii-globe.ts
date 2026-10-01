@@ -1,5 +1,16 @@
-import { afterNextRender, Component, DestroyRef, ElementRef, inject, viewChild } from '@angular/core';
-import { createGlobe } from './globe-renderer';
+import { HttpErrorResponse } from '@angular/common/http';
+import {
+  afterNextRender,
+  Component,
+  DestroyRef,
+  ElementRef,
+  inject,
+  Injector,
+  signal,
+  viewChild,
+} from '@angular/core';
+import { createGlobe, project, Spot, unproject } from './globe-renderer';
+import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 
 const COLS = 61;
 // Monospace glyphs are about 0.6 as wide as they are tall; this keeps the globe round.
@@ -14,6 +25,10 @@ const MOMENTUM_DECAY = 1;
 const VELOCITY_SMOOTHING = 0.1;
 /** Cap on flick speed (radians per second) so a jumpy pointer can't make it unreadably fast. */
 const MAX_SPEED = 4 * Math.PI;
+/** Pixels the pointer may wander during a press and still count as a click rather than a drag. */
+const CLICK_SLOP = 5;
+/** A press held longer than this (ms) is a drag, or a hold, not a click. */
+const CLICK_MAX_MS = 500;
 
 @Component({
   selector: 'app-ascii-globe',
@@ -22,14 +37,67 @@ const MAX_SPEED = 4 * Math.PI;
 })
 export class AsciiGlobe {
   private readonly pre = viewChild.required<ElementRef<HTMLPreElement>>('globe');
+  private readonly noteInput = viewChild<ElementRef<HTMLInputElement>>('noteInput');
+  private readonly notesService = inject(NotesService);
+  private readonly injector = inject(Injector);
+
+  protected readonly maxLength = MAX_NOTE_LENGTH;
+  private notes: Note[] = [];
+  private redraw = () => {};
+  private nextTempId = -1;
+
+  /** Where the visitor clicked, while the note form is open. */
+  protected readonly pending = signal<Spot | null>(null);
+  /** The note nearest the front-center of the globe, shown as readable text. */
+  protected readonly featured = signal<Note | null>(null);
+  protected readonly error = signal('');
+
+  protected cancel() {
+    this.pending.set(null);
+  }
+
+  protected save(text: string) {
+    const spot = this.pending();
+    text = text.trim();
+    if (!spot || !text) return;
+    this.pending.set(null);
+    this.error.set('');
+
+    // Show it right away; the server's copy replaces it once saved.
+    const temp: Note = { id: this.nextTempId--, ...spot, text, created_at: new Date().toISOString() };
+    this.setNotes([...this.notes, temp]);
+    this.notesService.add({ ...spot, text }).subscribe({
+      next: (saved) => this.setNotes(this.notes.map((n) => (n.id === temp.id ? saved : n))),
+      error: (err: HttpErrorResponse) => {
+        this.setNotes(this.notes.filter((n) => n.id !== temp.id));
+        this.error.set(
+          err.status === 429 ? 'Too many notes, try again in a bit.' : "Couldn't save that note, sorry.",
+        );
+      },
+    });
+  }
+
+  private setNotes(notes: Note[]) {
+    this.notes = notes;
+    this.redraw();
+  }
 
   constructor() {
     const destroyRef = inject(DestroyRef);
+    this.notesService.list().subscribe({
+      next: (notes) => this.setNotes([...notes, ...this.notes.filter((n) => n.id < 0)]),
+      // The globe works fine without notes.
+      error: () => {},
+    });
 
     afterNextRender(() => {
       const el = this.pre().nativeElement;
       const render = createGlobe({ cols: COLS, rows: ROWS, tilt: TILT, light: LIGHT });
-      const draw = () => (el.textContent = render(angle));
+      const draw = () => {
+        el.textContent = render(angle, this.notes);
+        this.featured.set(nearestCenter(this.notes, angle));
+      };
+      this.redraw = draw;
 
       let angle = 0;
       let dragging = false;
@@ -37,6 +105,10 @@ export class AsciiGlobe {
       let dragX = 0;
       let dragRadius = 1;
       let dragTime = 0;
+      let downX = 0;
+      let downY = 0;
+      let downTime = 0;
+      let moved = false;
       // Radians per second. Smoothed from the pointer while dragging; after release it
       // decays back toward SPIN_SPEED so a flick coasts instead of snapping back.
       let velocity = SPIN_SPEED;
@@ -53,6 +125,10 @@ export class AsciiGlobe {
         dragX = e.clientX;
         dragRadius = Math.max(1, el.getBoundingClientRect().width / 2);
         dragTime = performance.now();
+        downX = e.clientX;
+        downY = e.clientY;
+        downTime = dragTime;
+        moved = false;
         velocity = 0;
         try {
           el.setPointerCapture(e.pointerId);
@@ -67,6 +143,7 @@ export class AsciiGlobe {
         // context menu, released over another window), so end the drag now.
         if (e.buttons === 0) return endDrag();
         const now = performance.now();
+        if (Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_SLOP) moved = true;
         const delta = (e.clientX - dragX) / dragRadius;
         angle += delta;
         const dt = (now - dragTime) / 1000;
@@ -86,6 +163,23 @@ export class AsciiGlobe {
         dragPointer = undefined;
         el.classList.remove('dragging');
       };
+      // A press that barely moved is a click: open the note form for the spot under it.
+      const onUp = (e: PointerEvent) => {
+        if (dragging && e.pointerId === dragPointer && !moved && performance.now() - downTime <= CLICK_MAX_MS) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            const y = 1 - ((e.clientY - rect.top) / rect.height) * 2;
+            const spot = unproject(x, y, angle, TILT);
+            if (spot) {
+              this.error.set('');
+              this.pending.set(spot);
+              afterNextRender(() => this.noteInput()?.nativeElement.focus(), { injector: this.injector });
+            }
+          }
+        }
+        onEnd(e);
+      };
       const onEnd = (e: PointerEvent) => {
         if (e.pointerId === dragPointer) endDrag();
       };
@@ -95,7 +189,7 @@ export class AsciiGlobe {
         [el, 'pointermove', onMove as EventListener],
         // Pointer capture normally routes these to `el`, but listen on window too in
         // case capture failed or was released.
-        [window, 'pointerup', onEnd as EventListener],
+        [window, 'pointerup', onUp as EventListener],
         [window, 'pointercancel', onEnd as EventListener],
         [el, 'lostpointercapture', onEnd as EventListener],
         [el, 'contextmenu', endDrag],
@@ -158,4 +252,20 @@ export class AsciiGlobe {
       });
     });
   }
+}
+
+/** Of the notes on the visible side of the globe, the one closest to its front-center. */
+function nearestCenter(notes: readonly Note[], angle: number): Note | null {
+  let best: Note | null = null;
+  let bestDistance = Infinity;
+  for (const note of notes) {
+    const p = project(note, angle, TILT);
+    if (p.z <= 0) continue;
+    const distance = p.x * p.x + p.y * p.y;
+    if (distance < bestDistance) {
+      best = note;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }

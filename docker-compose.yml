@@ -2,6 +2,9 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    # Globe notes live in a SQLite file here, so they survive container restarts and rebuilds.
+    volumes:
+      - notes-data:/data
 
   frontend:
     build: ./frontend
@@ -31,6 +34,9 @@ services:
     networks:
       - default
       - proxyhosts
+
+volumes:
+  notes-data:
 
 networks:
   default:
