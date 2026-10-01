@@ -14,6 +14,25 @@
   align-items: center;
   width: 100%;
   max-width: 44rem;
+  // The dark space is drawn in the same character cells as the globe, so both share one font.
+  // The space is SPACE_COLS (77) cells wide, about 46.2em, and it has to fit the viewport
+  // (minus the 1rem gutters above and the default 8px body margins).
+  font-family: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+  font-size: min(12px, calc((100vw - 3rem) / 47));
+  line-height: 1;
+  // Room for the space's rows above and below the globe (SPACE_PAD), so it never covers the text around it.
+  padding: 6em 0 2em;
+}
+
+// Behind everything, sized by its own characters and centered on the globe.
+.space {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: pre;
+  user-select: none;
+  pointer-events: none;
 }
 
 // Panels are moved next to their dots in script, every frame; they never take clicks or drags.
@@ -82,15 +101,9 @@
 }
 
 .globe {
+  position: relative;
   margin: 0;
-  font-family: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
-  // The grid is 61 character cells wide, and a monospace cell is ~0.6em wide, so it
-  // measures ~36.75em. Shrink the font on narrow viewports so the whole globe fits
-  // (viewport minus the 1rem gutters above and the default 8px body margins) instead
-  // of being clipped.
-  font-size: min(12px, calc((100vw - 3rem) / 37));
-  line-height: 1;
-  color: rgb(241, 16, 16);
+  font: inherit;
   // Keep the grid on fixed rows and columns.
   white-space: pre;
   user-select: none;
