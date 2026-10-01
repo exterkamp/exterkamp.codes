@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 # The Angular CLI needs Node >= 24.15 (or 22.22+). If the default node is older, use nvm's newest v24.
 node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0; }
 if [ "$(node_major)" -lt 24 ]; then
-  nvm_node="$(ls -d "$HOME"/.nvm/versions/node/v24.* 2>/dev/null | sort -V | tail -n 1)"
+  nvm_node="$(ls -d "$HOME"/.nvm/versions/node/v24.* 2>/dev/null | sort -V | tail -n 1 || true)"
   if [ -z "$nvm_node" ]; then
     echo "dev.sh: need Node 24+ (found $(node -v 2>/dev/null || echo none)); run 'nvm install 24'" >&2
     exit 1
