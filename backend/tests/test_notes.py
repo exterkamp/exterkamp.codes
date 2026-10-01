@@ -1,0 +1,103 @@
+import sqlite3
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import main
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOTES_DB", str(tmp_path / "notes.db"))
+    main._recent_posts.clear()
+    return TestClient(main.app)
+
+
+def post(client, text="hello", lat=10.5, lon=-20.25, **kwargs):
+    return client.post("/api/notes", json={"lat": lat, "lon": lon, "text": text}, **kwargs)
+
+
+def test_list_is_empty_at_first(client):
+    r = client.get("/api/notes")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_add_then_list(client):
+    r = post(client, "  hi there  ")
+    assert r.status_code == 201
+    created = r.json()
+    assert created["text"] == "hi there"
+    assert (created["lat"], created["lon"]) == (10.5, -20.25)
+    assert created["id"] and created["created_at"]
+
+    post(client, "second")
+    notes = client.get("/api/notes").json()
+    assert [n["text"] for n in notes] == ["hi there", "second"]
+    assert notes[0] == created
+
+
+def test_notes_survive_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOTES_DB", str(tmp_path / "notes.db"))
+    main._recent_posts.clear()
+    post(TestClient(main.app), "still here")
+    # A new client opens the database file afresh, like a restarted process would.
+    assert [n["text"] for n in TestClient(main.app).get("/api/notes").json()] == ["still here"]
+
+
+def test_text_is_stored_verbatim_not_as_html(client):
+    post(client, "<script>alert(1)</script>")
+    assert client.get("/api/notes").json()[0]["text"] == "<script>alert(1)</script>"
+
+
+@pytest.mark.parametrize("text", ["", "   ", "x" * 141, "bad\x00byte", "line\nbreak"])
+def test_rejects_bad_text(client, text):
+    assert post(client, text).status_code == 422
+    assert client.get("/api/notes").json() == []
+
+
+def test_accepts_exactly_140_characters(client):
+    assert post(client, "x" * 140).status_code == 201
+
+
+@pytest.mark.parametrize("lat,lon", [(90.1, 0), (-91, 0), (0, 180.5), (0, -181)])
+def test_rejects_out_of_range_location(client, lat, lon):
+    assert post(client, lat=lat, lon=lon).status_code == 422
+
+
+def test_rejects_missing_fields(client):
+    assert client.post("/api/notes", json={"text": "no place"}).status_code == 422
+
+
+def test_rate_limits_per_client(client):
+    for _ in range(main.RATE_LIMIT_POSTS):
+        assert post(client, headers={"X-Real-IP": "1.1.1.1"}).status_code == 201
+    r = post(client, headers={"X-Real-IP": "1.1.1.1"})
+    assert r.status_code == 429
+    assert int(r.headers["Retry-After"]) >= 1
+    # Someone else is unaffected, and reading is never limited.
+    assert post(client, headers={"X-Real-IP": "2.2.2.2"}).status_code == 201
+    assert client.get("/api/notes", headers={"X-Real-IP": "1.1.1.1"}).status_code == 200
+
+
+def test_rate_limit_window_expires(client, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(main.time, "monotonic", lambda: clock[0])
+    for _ in range(main.RATE_LIMIT_POSTS):
+        post(client)
+    assert post(client).status_code == 429
+    clock[0] += main.RATE_LIMIT_WINDOW + 1
+    assert post(client).status_code == 201
+
+
+def test_rejected_posts_do_not_use_up_the_limit(client):
+    for _ in range(main.RATE_LIMIT_POSTS + 2):
+        post(client, text="")
+    assert post(client).status_code == 201
+
+
+def test_ip_addresses_are_not_stored(client, tmp_path):
+    post(client, headers={"X-Real-IP": "203.0.113.9"})
+    with sqlite3.connect(tmp_path / "notes.db") as conn:
+        dump = repr(conn.execute("SELECT * FROM notes").fetchall())
+    assert "203.0.113.9" not in dump

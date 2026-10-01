@@ -43,6 +43,10 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+Notes are stored in SQLite at `/data/notes.db`; set `NOTES_DB` to put it elsewhere
+(e.g. `NOTES_DB=./notes.db`). In Docker it lives on the `notes-data` volume. Backend tests:
+`pip install -r requirements-dev.txt && python -m pytest`.
+
 Frontend (requires Node 22.22+/24.15+ — use `nvm use 24`):
 
 ```bash

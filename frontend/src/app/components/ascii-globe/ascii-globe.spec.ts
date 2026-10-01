@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { AsciiGlobe } from './ascii-globe';
+import { MARKER, unproject } from './globe-renderer';
+import { Note } from './notes.service';
+
+const configure = () =>
+  TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
 
 describe('AsciiGlobe', () => {
+  beforeEach(configure);
+
   it('renders a decorative globe', async () => {
     const fixture = TestBed.createComponent(AsciiGlobe);
     await fixture.whenStable();
@@ -116,6 +125,7 @@ describe('AsciiGlobe', () => {
     const setup = async () => {
       now = 1000;
       frames = [];
+      configure();
       const fixture = TestBed.createComponent(AsciiGlobe);
       await fixture.whenStable();
       pre = fixture.nativeElement.querySelector('pre');
@@ -157,6 +167,161 @@ describe('AsciiGlobe', () => {
       await setup();
       const slowThenRest = dragAndRelease(-150, 160, 496, 320);
       expect(fastThenRest).toBe(slowThenRest);
+    });
+  });
+
+  describe('notes', () => {
+    let fixture: ComponentFixture<AsciiGlobe>;
+    let http: HttpTestingController;
+    let pre: HTMLPreElement;
+    const el = (selector: string) => fixture.nativeElement.querySelector(selector);
+    const fire = (type: string, init: PointerEventInit = {}) =>
+      pre.dispatchEvent(new PointerEvent(type, { pointerId: 1, bubbles: true, buttons: 1, ...init }));
+    // jsdom has no layout: a 300x180 box puts the globe's center at (150, 90) and its edge 150px away.
+    const CENTER = { clientX: 150, clientY: 90 };
+    const click = (at: { clientX: number; clientY: number } = CENTER) => {
+      fire('pointerdown', at);
+      fire('pointerup', at);
+      fixture.detectChanges();
+    };
+    const note = (id: number, lat: number, lon: number, text: string): Note => ({
+      id,
+      lat,
+      lon,
+      text,
+      created_at: '2026-01-01T00:00:00+00:00',
+    });
+    const markerCount = () => pre.textContent!.split(MARKER).length - 1;
+
+    /** The globe never turns here (no animation frames run), so angle stays 0. */
+    const setup = async (existing: Note[] = []) => {
+      fixture = TestBed.createComponent(AsciiGlobe);
+      http = TestBed.inject(HttpTestingController);
+      await fixture.whenStable();
+      pre = el('pre');
+      pre.getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 180 }) as DOMRect;
+      http.expectOne('/api/notes').flush(existing);
+      fixture.detectChanges();
+    };
+
+    beforeEach(() => {
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('loads saved notes, marks the visible ones and shows only the one nearest the center', async () => {
+      // At angle 0 the center of the globe is (lat 23.4, lon 0).
+      await setup([
+        note(1, 23.4, 0, 'dead center'),
+        note(2, 23.4, 40, 'off to the side'),
+        note(3, 23.4, 180, 'on the far side'),
+      ]);
+      expect(markerCount()).toBe(2);
+      expect(el('.note').textContent.trim()).toBe('dead center');
+    });
+
+    it('shows note text as plain text, never HTML', async () => {
+      await setup([note(1, 23.4, 0, '<img src=x onerror=alert(1)>')]);
+      expect(el('.note').textContent.trim()).toBe('<img src=x onerror=alert(1)>');
+      expect(el('.note img')).toBeNull();
+    });
+
+    it('opens a prompt for the spot under a click', async () => {
+      await setup();
+      expect(el('form')).toBeNull();
+      click();
+      expect(el('form')).not.toBeNull();
+      expect(el('input').maxLength).toBe(140);
+      expect(el('form label').textContent).toContain('23.4°, 0.0°');
+    });
+
+    it('does not open the prompt after a drag, or for a click off the globe', async () => {
+      await setup();
+      fire('pointerdown', CENTER);
+      fire('pointermove', { clientX: 170, clientY: 90 });
+      fire('pointermove', { clientX: 150, clientY: 90 }); // back where it started, but it was a drag
+      fire('pointerup', CENTER);
+      fixture.detectChanges();
+      expect(el('form')).toBeNull();
+
+      click({ clientX: 2, clientY: 2 }); // the square's corner is dark background
+      expect(el('form')).toBeNull();
+    });
+
+    it('treats a few pixels of jitter as a click', async () => {
+      await setup();
+      fire('pointerdown', CENTER);
+      fire('pointermove', { clientX: 152, clientY: 91 });
+      fire('pointerup', { clientX: 152, clientY: 91 });
+      fixture.detectChanges();
+      expect(el('form')).not.toBeNull();
+    });
+
+    it('shows a saved note right away and posts it to the backend', async () => {
+      await setup();
+      click({ clientX: 150, clientY: 60 });
+      const input: HTMLInputElement = el('input');
+      input.value = '  hello world ';
+      el('form').dispatchEvent(new Event('submit', { cancelable: true }));
+      fixture.detectChanges();
+
+      expect(el('form')).toBeNull();
+      expect(markerCount()).toBe(1);
+      expect(el('.note').textContent.trim()).toBe('hello world');
+
+      const spot = unproject(0, 1 / 3, 0, (23.4 * Math.PI) / 180)!;
+      const req = http.expectOne('/api/notes');
+      expect(req.request.method).toBe('POST');
+      expect(req.request.body.text).toBe('hello world');
+      expect(req.request.body.lat).toBeCloseTo(spot.lat);
+      expect(req.request.body.lon).toBeCloseTo(spot.lon);
+      req.flush(note(7, spot.lat, spot.lon, 'hello world'));
+      fixture.detectChanges();
+      expect(markerCount()).toBe(1);
+      expect(el('.note').textContent.trim()).toBe('hello world');
+    });
+
+    it('does not post an empty note, and can be cancelled', async () => {
+      await setup();
+      click();
+      el('input').value = '   ';
+      el('form').dispatchEvent(new Event('submit', { cancelable: true }));
+      http.expectNone('/api/notes');
+
+      el('form button[type=button]').click();
+      fixture.detectChanges();
+      expect(el('form')).toBeNull();
+    });
+
+    it('takes a note back and says why if the backend refuses it', async () => {
+      await setup();
+      click();
+      el('input').value = 'too much';
+      el('form').dispatchEvent(new Event('submit', { cancelable: true }));
+      expect(markerCount()).toBe(1);
+
+      http.expectOne('/api/notes').flush({ detail: 'slow down' }, { status: 429, statusText: 'Too Many Requests' });
+      fixture.detectChanges();
+      expect(markerCount()).toBe(0);
+      expect(el('.note-error').textContent).toContain('Too many notes');
+    });
+
+    it('still works if notes cannot be loaded', async () => {
+      fixture = TestBed.createComponent(AsciiGlobe);
+      http = TestBed.inject(HttpTestingController);
+      await fixture.whenStable();
+      http.expectOne('/api/notes').flush('nope', { status: 500, statusText: 'Server Error' });
+      fixture.detectChanges();
+      expect(el('pre').textContent.length).toBeGreaterThan(100);
+      expect(el('.note-error')).toBeNull();
     });
   });
 });

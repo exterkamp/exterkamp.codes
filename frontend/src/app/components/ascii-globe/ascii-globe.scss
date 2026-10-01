@@ -1,6 +1,7 @@
 :host {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   margin: 2rem 0;
   // Side gutter so the globe never touches the viewport edge.
   padding: 0 1rem;
@@ -26,4 +27,46 @@
   &.dragging {
     cursor: grabbing;
   }
+}
+
+.notes {
+  margin-top: 0.75rem;
+  max-width: 100%;
+  text-align: center;
+}
+
+.note {
+  // Reserve a line so the page doesn't jump as notes rotate in and out.
+  min-height: 1.5em;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.note-form {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  input {
+    width: min(22rem, 100%);
+    font: inherit;
+  }
+
+  button {
+    font: inherit;
+  }
+}
+
+.note-error {
+  margin: 0.5rem 0 0;
+  color: rgb(241, 16, 16);
 }

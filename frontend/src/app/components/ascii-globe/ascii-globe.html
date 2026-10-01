@@ -1,1 +1,25 @@
 <pre #globe class="globe" aria-hidden="true"></pre>
+
+<div class="notes">
+  <!-- Note text is user-supplied: only ever bound as text, never as HTML. -->
+  <p class="note" aria-live="polite">
+    @if (featured(); as note) {
+      {{ note.text }}
+    }
+  </p>
+
+  @if (pending(); as spot) {
+    <form class="note-form" (submit)="$event.preventDefault(); save(noteInput.value)" (keydown.escape)="cancel()">
+      <label>
+        Leave a note here ({{ spot.lat.toFixed(1) }}°, {{ spot.lon.toFixed(1) }}°)
+        <input #noteInput type="text" [maxLength]="maxLength" autocomplete="off" required />
+      </label>
+      <button type="submit">Save</button>
+      <button type="button" (click)="cancel()">Cancel</button>
+    </form>
+  }
+
+  @if (error()) {
+    <p class="note-error" role="alert">{{ error() }}</p>
+  }
+</div>
