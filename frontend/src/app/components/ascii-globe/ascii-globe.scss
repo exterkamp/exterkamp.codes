@@ -16,18 +16,20 @@
   max-width: 44rem;
 }
 
+// Panels are moved next to their dots in script, every frame; they never take clicks or drags.
 .panels {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-  width: 100%;
-  // Leave room for the line to run from the panel down to the globe.
-  margin-bottom: 1.5rem;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .panel {
-  // Same height for every slot, whether or not it holds a note, so the page doesn't jump.
-  min-height: 4.5em;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(12rem, 60%);
   margin: 0;
   padding: 0.5rem 0.625rem;
   border: 1px solid rgb(241, 16, 16);

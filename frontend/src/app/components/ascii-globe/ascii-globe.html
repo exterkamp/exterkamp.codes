@@ -1,12 +1,12 @@
 <div #stage class="stage">
   <!-- Note text is user-supplied: only ever bound as text, never as HTML. -->
+  <pre #globe class="globe" aria-hidden="true"></pre>
+
   <div class="panels">
     @for (note of shown(); track $index) {
       <p class="panel" [class.active]="slots()[$index]">{{ note?.text }}</p>
     }
   </div>
-
-  <pre #globe class="globe" aria-hidden="true"></pre>
 
   <svg class="links" aria-hidden="true">
     @for (note of shown(); track $index) {
