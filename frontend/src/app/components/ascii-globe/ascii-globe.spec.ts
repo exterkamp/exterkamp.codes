@@ -264,6 +264,15 @@ describe('AsciiGlobe', () => {
       expect(panelTexts().sort()).toEqual(['a bit left', 'dead center', 'off to the side']);
     });
 
+    it('draws each marker on a dark background so its red reads on any terrain', async () => {
+      await setup([note(1, 23.4, 0, 'dead center'), note(2, 23.4, 40, 'off to the side')]);
+      const marked = [...pre.querySelectorAll<HTMLElement>('span')].filter((s) => s.textContent === MARKER);
+      expect(marked.length).toBe(2);
+      expect(marked.every((s) => s.style.backgroundColor !== '')).toBe(true);
+      const plain = [...pre.querySelectorAll<HTMLElement>('span')].filter((s) => s.textContent !== MARKER);
+      expect(plain.every((s) => s.style.backgroundColor === '')).toBe(true);
+    });
+
     it('shows no panel for a visible note outside the front quarter, but keeps its dot', async () => {
       await setup([note(1, 23.4, 0, 'dead center'), note(2, 23.4, 75, 'near the edge')]);
       expect(markerCount()).toBe(2);

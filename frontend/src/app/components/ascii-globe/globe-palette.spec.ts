@@ -5,6 +5,7 @@ import {
   DESERT_COLOR,
   ICE_COLOR,
   LIGHT_LEVELS,
+  NIGHT_FLOOR,
   MARKER_CELL,
   MARKER_COLOR,
   NO_CELL,
@@ -66,6 +67,13 @@ describe('palette', () => {
         expect(lum).toBeLessThan(previous);
         previous = lum;
       }
+    }
+  });
+
+  it('keeps even the darkest night-side cell of every terrain visible against the space (1.8:1)', () => {
+    expect(NIGHT_FLOOR).toBeGreaterThan(0);
+    for (const terrain of [Terrain.Ocean, Terrain.Vegetation, Terrain.Desert, Terrain.Ice]) {
+      expect(contrast(cellRgb(cellCode(terrain, 0))!, SPACE_COLOR)).toBeGreaterThanOrEqual(1.8);
     }
   });
 

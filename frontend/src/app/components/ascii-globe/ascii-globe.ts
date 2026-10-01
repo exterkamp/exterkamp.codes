@@ -240,16 +240,18 @@ export class AsciiGlobe {
       const render = createGlobe({ cols: COLS, rows: ROWS, tilt: TILT, light: LIGHT });
       // One span per cell, made once. A frame only touches the cells whose character or color changed.
       const cells = this.buildCells(el);
-      const shownChars: string[] = [];
+      // Setting a text node's data is much cheaper than replacing a span's children.
+      const texts = cells.map((cell) => cell.firstChild as Text);
+      const shownChars = new Uint8Array(COLS * ROWS);
       const shownCodes = new Uint8Array(COLS * ROWS).fill(NO_CELL);
       const colorOf = new Map<number, string>();
       const draw = () => {
         const frame = render(angle, this.notes);
         for (let i = 0; i < cells.length; i++) {
-          const char = frame.text[i + Math.floor(i / COLS)];
+          const char = frame.chars[i + Math.floor(i / COLS)];
           const code = frame.colors[i];
           if (shownChars[i] !== char) {
-            cells[i].textContent = char;
+            texts[i].data = String.fromCharCode(char);
             shownChars[i] = char;
           }
           if (shownCodes[i] !== code) {
@@ -260,7 +262,9 @@ export class AsciiGlobe {
               colorOf.set(code, color);
             }
             cells[i].style.color = color;
-            cells[i].style.backgroundColor = code === MARKER_CELL ? css(SPACE_COLOR) : '';
+            // Only markers have a background, so only touch it when a cell becomes or stops being one.
+            if (code === MARKER_CELL) cells[i].style.backgroundColor = css(SPACE_COLOR);
+            else if (shownCodes[i] === MARKER_CELL) cells[i].style.backgroundColor = '';
             shownCodes[i] = code;
           }
         }

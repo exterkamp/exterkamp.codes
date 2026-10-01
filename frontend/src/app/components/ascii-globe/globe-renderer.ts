@@ -14,8 +14,10 @@ export interface TerrainMap {
 
 /** One rendered frame. */
 export interface GlobeFrame {
-  /** The characters, with a newline after every row but the last. */
-  text: string;
+  /** The characters, with a newline after every row but the last. Built on first use. */
+  readonly text: string;
+  /** The same characters as char codes, with a newline after every row (the last one included). */
+  chars: Uint8Array;
   /** A color code (see globe-palette) for each cell, row by row, with no newlines. */
   colors: Uint8Array;
 }
@@ -49,7 +51,7 @@ export interface Spot {
 }
 
 export const bitmapLand: Land = (() => {
-  const raw = atob(LAND_BITS);
+  const raw = Uint8Array.from(atob(LAND_BITS), (ch) => ch.charCodeAt(0));
   const rowBytes = Math.ceil(LAND_WIDTH / 8);
   return {
     isLand(lat, lon) {
@@ -57,13 +59,13 @@ export const bitmapLand: Land = (() => {
       const row = Math.floor(((Math.PI / 2 - lat) / Math.PI) * LAND_HEIGHT);
       const x = ((col % LAND_WIDTH) + LAND_WIDTH) % LAND_WIDTH;
       const y = Math.min(LAND_HEIGHT - 1, Math.max(0, row));
-      return ((raw.charCodeAt(y * rowBytes + (x >> 3)) >> (7 - (x & 7))) & 1) === 1;
+      return ((raw[y * rowBytes + (x >> 3)] >> (7 - (x & 7))) & 1) === 1;
     },
   };
 })();
 
 export const bitmapTerrain: TerrainMap = (() => {
-  const raw = atob(TERRAIN_BITS);
+  const raw = Uint8Array.from(atob(TERRAIN_BITS), (ch) => ch.charCodeAt(0));
   const rowBytes = Math.ceil(TERRAIN_WIDTH / 4);
   return {
     terrainAt(lat, lon) {
@@ -72,7 +74,7 @@ export const bitmapTerrain: TerrainMap = (() => {
       const x = ((col % TERRAIN_WIDTH) + TERRAIN_WIDTH) % TERRAIN_WIDTH;
       const y = Math.min(TERRAIN_HEIGHT - 1, Math.max(0, row));
       // The bitmap stores 0 = vegetation, 1 = desert, 2 = ice, which are Terrain's values less ocean's 0.
-      return 1 + ((raw.charCodeAt(y * rowBytes + (x >> 2)) >> (6 - 2 * (x & 3))) & 3);
+      return 1 + ((raw[y * rowBytes + (x >> 2)] >> (6 - 2 * (x & 3))) & 3);
     },
   };
 })();
@@ -183,7 +185,7 @@ export function createGlobe(
 
   const rowLength = cols + 1;
   return (angle, markers = []) => {
-    // Characters with a newline after every row but the last; the last slot is dropped from the text.
+    // Characters with a newline after every row; the last one is dropped from `text`.
     const chars = new Uint8Array(rows * rowLength);
     const colors = new Uint8Array(cols * rows);
     for (let r = 0; r < rows; r++) {
@@ -212,6 +214,13 @@ export function createGlobe(
         colors[cell.row * cols + cell.col] = MARKER_CELL;
       }
     }
-    return { text: String.fromCharCode(...chars.subarray(0, chars.length - 1)), colors };
+    let text: string | undefined;
+    return {
+      get text() {
+        return (text ??= String.fromCharCode(...chars.subarray(0, chars.length - 1)));
+      },
+      chars,
+      colors,
+    };
   };
 }

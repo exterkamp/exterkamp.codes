@@ -31,6 +31,9 @@ export const STAR_COLOR: Rgb = [214, 220, 238];
 /** Brightness is rounded to this many steps, so neighboring cells of one terrain share a color and a frame needs few distinct styles. */
 export const LIGHT_LEVELS = 8;
 
+/** The darkest a shaded cell gets, as a fraction of its lit color, so the night side still reads against the space. */
+export const NIGHT_FLOOR = 0.45;
+
 /** A cell off the globe: nothing is drawn. */
 export const NO_CELL = 0;
 /** A note marker. Drawn on a dark background so its red reads on any terrain. */
@@ -53,11 +56,11 @@ export function shade(color: Rgb, light: number): Rgb {
   return [Math.round(color[0] * light), Math.round(color[1] * light), Math.round(color[2] * light)];
 }
 
-/** The color of a lit cell: the terrain's color, darkened for the shaded side. The brightest level is the full color. */
+/** The color of a lit cell: the terrain's color, darkened for the shaded side but never below NIGHT_FLOOR. The brightest level is the full color. */
 export function cellRgb(code: number): Rgb | null {
   if (code === MARKER_CELL) return MARKER_COLOR;
   const cell = decodeCell(code);
-  return cell && shade(TERRAIN_COLORS[cell.terrain], (cell.level + 1) / LIGHT_LEVELS);
+  return cell && shade(TERRAIN_COLORS[cell.terrain], NIGHT_FLOOR + ((1 - NIGHT_FLOOR) * (cell.level + 1)) / LIGHT_LEVELS);
 }
 
 export function css(color: Rgb): string {
