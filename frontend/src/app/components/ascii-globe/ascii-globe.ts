@@ -10,13 +10,37 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { cellRgb, css, MARKER_CELL, NO_CELL, SPACE_COLOR, STAR_COLOR } from './globe-palette';
 import { createGlobe, markerCell, project, Spot, unproject } from './globe-renderer';
 import { assignSlots, cellCenter, advancePanels, layoutLanes, LANES, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, placementRank, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
+import { createSpace, Space } from './space';
 
 const COLS = 61;
 // Monospace glyphs are about 0.6 as wide as they are tall; this keeps the globe round.
 const ROWS = Math.round(COLS * 0.6);
+/** Dark space around the globe, in character cells. The top and sides dither into the white page; the bottom is a hard edge. */
+export const SPACE_PAD = { top: 6, side: 8, bottom: 2 };
+/** Cells over which the dark space dithers from white to solid. */
+export const SPACE_FADE = { top: 6, side: 8 };
+export const SPACE_COLS = COLS + 2 * SPACE_PAD.side;
+export const SPACE_ROWS = ROWS + SPACE_PAD.top + SPACE_PAD.bottom;
+/** Fixed seed and density for the stars, so they are the same on every frame and every visit. */
+const STAR_SEED = 20;
+const STAR_CHANCE = 0.035;
+
+export function buildSpace(): Space {
+  return createSpace({
+    cols: SPACE_COLS,
+    rows: SPACE_ROWS,
+    fadeTop: SPACE_FADE.top,
+    fadeSide: SPACE_FADE.side,
+    seed: STAR_SEED,
+    starChance: STAR_CHANCE,
+    clear: { col: SPACE_COLS / 2, row: SPACE_PAD.top + ROWS / 2, rx: COLS / 2, ry: ROWS / 2 },
+  });
+}
+
 const TILT = (23.4 * Math.PI) / 180;
 const LIGHT = [-0.5, 0.4, 0.8] as const;
 /** Radians per second: one full turn every ~30s. */
@@ -41,6 +65,7 @@ const BLOCKED_RETRY_MS = 400;
 })
 export class AsciiGlobe {
   private readonly pre = viewChild.required<ElementRef<HTMLPreElement>>('globe');
+  private readonly spaceEl = viewChild.required<ElementRef<HTMLElement>>('space');
   private readonly stage = viewChild.required<ElementRef<HTMLElement>>('stage');
   private readonly noteInput = viewChild<ElementRef<HTMLInputElement>>('noteInput');
   private readonly notesService = inject(NotesService);
@@ -163,6 +188,58 @@ export class AsciiGlobe {
     });
   }
 
+  /** Fills the globe element with a span for each cell, and a newline after each row but the last. */
+  private buildCells(el: HTMLElement): HTMLSpanElement[] {
+    const cells: HTMLSpanElement[] = [];
+    const fragment = document.createDocumentFragment();
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const cell = document.createElement('span');
+        cell.textContent = ' ';
+        cells.push(cell);
+        fragment.appendChild(cell);
+      }
+      if (r < ROWS - 1) fragment.appendChild(document.createTextNode('\n'));
+    }
+    el.replaceChildren(fragment);
+    return cells;
+  }
+
+  /** Draws the dark space once. It is static: the same grid and the same stars on every frame. */
+  private drawSpace(el: HTMLElement) {
+    const space = buildSpace();
+    const fragment = document.createDocumentFragment();
+    for (let r = 0; r < space.rows; r++) {
+      let run = '';
+      let runDark = false;
+      const flush = () => {
+        if (!run) return;
+        if (runDark) {
+          const span = document.createElement('span');
+          span.style.backgroundColor = css(SPACE_COLOR);
+          span.style.color = css(STAR_COLOR);
+          span.textContent = run;
+          fragment.appendChild(span);
+        } else {
+          fragment.appendChild(document.createTextNode(run));
+        }
+        run = '';
+      };
+      for (let c = 0; c < space.cols; c++) {
+        const i = r * space.cols + c;
+        const isDark = space.dark[i] === 1;
+        if (isDark !== runDark) {
+          flush();
+          runDark = isDark;
+        }
+        run += isDark ? space.glyphs[i] : ' ';
+      }
+      flush();
+      if (r < space.rows - 1) fragment.appendChild(document.createTextNode('\n'));
+    }
+    el.replaceChildren(fragment);
+  }
+
   private setNotes(notes: Note[]) {
     this.notes = notes;
     this.redraw();
@@ -178,9 +255,38 @@ export class AsciiGlobe {
 
     afterNextRender(() => {
       const el = this.pre().nativeElement;
+      this.drawSpace(this.spaceEl().nativeElement);
       const render = createGlobe({ cols: COLS, rows: ROWS, tilt: TILT, light: LIGHT });
+      // One span per cell, made once. A frame only touches the cells whose character or color changed.
+      const cells = this.buildCells(el);
+      // Setting a text node's data is much cheaper than replacing a span's children.
+      const texts = cells.map((cell) => cell.firstChild as Text);
+      const shownChars = new Uint8Array(COLS * ROWS);
+      const shownCodes = new Uint8Array(COLS * ROWS).fill(NO_CELL);
+      const colorOf = new Map<number, string>();
       const draw = () => {
-        el.textContent = render(angle, this.notes);
+        const frame = render(angle, this.notes);
+        for (let i = 0; i < cells.length; i++) {
+          const char = frame.chars[i + Math.floor(i / COLS)];
+          const code = frame.colors[i];
+          if (shownChars[i] !== char) {
+            texts[i].data = String.fromCharCode(char);
+            shownChars[i] = char;
+          }
+          if (shownCodes[i] !== code) {
+            let color = colorOf.get(code);
+            if (color === undefined) {
+              const rgb = cellRgb(code);
+              color = rgb ? css(rgb) : '';
+              colorOf.set(code, color);
+            }
+            cells[i].style.color = color;
+            // Only markers have a background, so only touch it when a cell becomes or stops being one.
+            if (code === MARKER_CELL) cells[i].style.backgroundColor = css(SPACE_COLOR);
+            else if (shownCodes[i] === MARKER_CELL) cells[i].style.backgroundColor = '';
+            shownCodes[i] = code;
+          }
+        }
         this.updatePanels(angle);
       };
       this.redraw = draw;

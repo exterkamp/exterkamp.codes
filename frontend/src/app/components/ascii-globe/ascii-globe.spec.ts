@@ -2,12 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { AsciiGlobe } from './ascii-globe';
+import { AsciiGlobe, buildSpace, SPACE_COLS, SPACE_ROWS } from './ascii-globe';
 import { MARKER, unproject } from './globe-renderer';
 import { Note } from './notes.service';
 
 const configure = () =>
   TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+
+const redrawGlobe = (fixture: ComponentFixture<AsciiGlobe>) => {
+  const pre: HTMLPreElement = fixture.nativeElement.querySelector('pre');
+  pre.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, bubbles: true, buttons: 1, clientX: 0 }));
+  pre.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, bubbles: true, buttons: 1, clientX: 40 }));
+  pre.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true, clientX: 40 }));
+};
 
 describe('AsciiGlobe', () => {
   beforeEach(configure);
@@ -18,6 +25,30 @@ describe('AsciiGlobe', () => {
     const pre: HTMLPreElement = fixture.nativeElement.querySelector('pre');
     expect(pre.getAttribute('aria-hidden')).toBe('true');
     expect(pre.textContent!.split('\n').length).toBeGreaterThan(10);
+  });
+
+  it('colors the globe cell by cell, with one span per cell', async () => {
+    const fixture = TestBed.createComponent(AsciiGlobe);
+    await fixture.whenStable();
+    const spans: HTMLElement[] = [...fixture.nativeElement.querySelectorAll('pre span')];
+    expect(spans.length).toBe(61 * 37);
+    const colors = new Set(spans.map((s) => s.style.color).filter(Boolean));
+    expect(colors.size).toBeGreaterThan(8);
+  });
+
+  it('draws the dark space once, static and hidden from screen readers', async () => {
+    const fixture = TestBed.createComponent(AsciiGlobe);
+    await fixture.whenStable();
+    const space: HTMLElement = fixture.nativeElement.querySelector('.space');
+    expect(space.getAttribute('aria-hidden')).toBe('true');
+    const lines = space.textContent!.split('\n');
+    expect(lines.length).toBe(SPACE_ROWS);
+    expect(lines.every((l) => l.length === SPACE_COLS)).toBe(true);
+    const before = space.innerHTML;
+    // The globe spins on, but the space never changes.
+    redrawGlobe(fixture);
+    expect(space.innerHTML).toBe(before);
+    expect(buildSpace().glyphs).toEqual(buildSpace().glyphs);
   });
 
   describe('dragging', () => {
@@ -232,6 +263,15 @@ describe('AsciiGlobe', () => {
       ]);
       expect(markerCount()).toBe(4);
       expect(panelTexts().sort()).toEqual(['a bit left', 'dead center', 'off to the side']);
+    });
+
+    it('draws each marker on a dark background so its red reads on any terrain', async () => {
+      await setup([note(1, 23.4, 0, 'dead center'), note(2, 23.4, 40, 'off to the side')]);
+      const marked = [...pre.querySelectorAll<HTMLElement>('span')].filter((s) => s.textContent === MARKER);
+      expect(marked.length).toBe(2);
+      expect(marked.every((s) => s.style.backgroundColor !== '')).toBe(true);
+      const plain = [...pre.querySelectorAll<HTMLElement>('span')].filter((s) => s.textContent !== MARKER);
+      expect(plain.every((s) => s.style.backgroundColor === '')).toBe(true);
     });
 
     it('shows no panel for a visible note outside the front quarter, but keeps its dot', async () => {

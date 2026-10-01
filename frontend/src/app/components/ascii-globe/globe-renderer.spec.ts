@@ -1,4 +1,5 @@
-import { bitmapLand, createGlobe, Land, MARKER, project, unproject } from './globe-renderer';
+import { cellCode, decodeCell, MARKER_CELL, NO_CELL, Terrain } from './globe-palette';
+import { bitmapLand, bitmapTerrain, createGlobe, Land, MARKER, project, unproject } from './globe-renderer';
 
 const options = { cols: 41, rows: 25, tilt: (23.4 * Math.PI) / 180, light: [-0.5, 0.4, 0.8] } as const;
 const deg = (d: number) => (d * Math.PI) / 180;
@@ -16,18 +17,113 @@ describe('bitmapLand', () => {
   });
 });
 
+describe('bitmapTerrain', () => {
+  const at = (lat: number, lon: number) => bitmapTerrain.terrainAt(deg(lat), deg(lon));
+
+  it('colors the landmarks the right way', () => {
+    expect(at(23, 12)).toBe(Terrain.Desert); // Sahara
+    expect(at(-3, -60)).toBe(Terrain.Vegetation); // Amazon
+    expect(at(72, -40)).toBe(Terrain.Ice); // Greenland
+    expect(at(-80, 0)).toBe(Terrain.Ice); // Antarctica
+    expect(at(38.5, -98)).toBe(Terrain.Vegetation); // Kansas
+    expect(at(42, 105)).toBe(Terrain.Desert); // Gobi
+    expect(at(22, 50)).toBe(Terrain.Desert); // Arabia
+    expect(at(0, 22)).toBe(Terrain.Vegetation); // Congo
+  });
+
+  it('is only asked about land, and the mid-Pacific is not land', () => {
+    expect(bitmapLand.isLand(deg(0), deg(-150))).toBe(false);
+    expect(bitmapLand.isLand(deg(23), deg(12))).toBe(true);
+  });
+
+  it('wraps longitude', () => {
+    expect(at(23, 12 + 360)).toBe(Terrain.Desert);
+  });
+});
+
+describe('createGlobe colors', () => {
+  const allLand: Land = { isLand: () => true };
+  const allOcean: Land = { isLand: () => false };
+  const decoded = (code: number) => decodeCell(code)!;
+
+  it('colors every cell on the globe and none off it, matching the text', () => {
+    const { text, colors } = createGlobe(options)(0);
+    const chars = text.split('\n').join('');
+    expect(colors.length).toBe(chars.length);
+    chars.split('').forEach((char, i) => {
+      expect(colors[i] === NO_CELL).toBe(char === ' ');
+    });
+  });
+
+  it('colors ocean where the land bitmap says ocean, with the ocean character', () => {
+    const { text, colors } = createGlobe(options, allOcean)(0);
+    const chars = text.split('\n').join('');
+    colors.forEach((code, i) => {
+      if (code === NO_CELL) return;
+      expect(chars[i]).toBe('.');
+      expect(decoded(code).terrain).toBe(Terrain.Ocean);
+    });
+  });
+
+  it('colors land by the terrain map', () => {
+    const terrain = { terrainAt: () => Terrain.Desert };
+    const { colors } = createGlobe(options, allLand, terrain)(0);
+    expect(new Set(Array.from(colors).filter((c) => c !== NO_CELL).map((c) => decoded(c).terrain))).toEqual(new Set([Terrain.Desert]));
+  });
+
+  it('shades the night side darker than the lit side, in every terrain', () => {
+    const { colors } = createGlobe(options, allLand)(0);
+    const levels = Array.from(colors).filter((c) => c !== NO_CELL).map((c) => decoded(c).level);
+    expect(Math.min(...levels)).toBeLessThan(Math.max(...levels));
+    // The light comes from the upper left, so the left side of the middle row is brighter than the right.
+    const row = 12 * options.cols;
+    expect(decoded(colors[row + 8]).level).toBeGreaterThan(decoded(colors[row + options.cols - 9]).level);
+  });
+
+  it('marks markers with their own code, and leaves the cell code otherwise alone', () => {
+    const render = createGlobe(options, allOcean);
+    const spot = { lat: 0, lon: 0 };
+    const withMarker = render(0, [spot]).colors;
+    expect(Array.from(withMarker).filter((c) => c === MARKER_CELL).length).toBe(1);
+    expect(Array.from(render(0).colors)).not.toContain(MARKER_CELL);
+  });
+
+  it('colors a real frame with all four terrains somewhere on Earth', () => {
+    const render = createGlobe({ ...options, tilt: 0.9 });
+    const seen = new Set<Terrain>();
+    for (let a = 0; a < 2 * Math.PI; a += 0.5) {
+      for (const code of render(a).colors) if (code !== NO_CELL) seen.add(decoded(code).terrain);
+    }
+    expect(seen).toEqual(new Set([Terrain.Ocean, Terrain.Vegetation, Terrain.Desert, Terrain.Ice]));
+  });
+
+  it('renders a colored frame in under 4ms on average', () => {
+    const render = createGlobe({ cols: 61, rows: 37, tilt: 0.4, light: [-0.5, 0.4, 0.8] });
+    const markers = [{ lat: 10, lon: 20 }];
+    render(0, markers);
+    const start = performance.now();
+    for (let i = 0; i < 300; i++) render(i * 0.05, markers);
+    expect((performance.now() - start) / 300).toBeLessThan(4);
+  });
+
+  it('keeps the unused cell code distinct from every real one', () => {
+    expect(cellCode(Terrain.Ocean, 0)).not.toBe(NO_CELL);
+    expect(cellCode(Terrain.Ice, 1)).not.toBe(MARKER_CELL);
+  });
+});
+
 describe('createGlobe', () => {
   const allLand: Land = { isLand: () => true };
   const allOcean: Land = { isLand: () => false };
 
   it('renders a grid of the requested size', () => {
-    const lines = createGlobe(options)(0).split('\n');
+    const lines = createGlobe(options)(0).text.split('\n');
     expect(lines).toHaveLength(options.rows);
     lines.forEach((line) => expect(line).toHaveLength(options.cols));
   });
 
   it('leaves the corners blank and is round', () => {
-    const lines = createGlobe(options, allLand)(0).split('\n');
+    const lines = createGlobe(options, allLand)(0).text.split('\n');
     expect(lines[0][0]).toBe(' ');
     expect(lines[0][options.cols - 1]).toBe(' ');
     expect(lines[options.rows - 1][0]).toBe(' ');
@@ -38,7 +134,7 @@ describe('createGlobe', () => {
   });
 
   it('shades land by light, brightest toward the light', () => {
-    const lines = createGlobe(options, allLand)(0).split('\n');
+    const lines = createGlobe(options, allLand)(0).text.split('\n');
     const ramp = ':-=+*#%@';
     const bright = ramp.indexOf(lines[8][14]); // up and to the left, toward the light
     const dark = ramp.indexOf(lines[16][28]); // down and to the right, away from it
@@ -46,20 +142,20 @@ describe('createGlobe', () => {
   });
 
   it('draws only blank or dot for an ocean-only world', () => {
-    const out = createGlobe(options, allOcean)(0);
+    const out = createGlobe(options, allOcean)(0).text;
     expect(out.replaceAll('\n', '')).toMatch(/^[ .]+$/);
   });
 
   it('faces the Sahara at angle 0 and the Pacific at angle π', () => {
     const render = createGlobe(options);
-    const center = (angle: number) => render(angle).split('\n')[12][20];
+    const center = (angle: number) => render(angle).text.split('\n')[12][20];
     expect(center(0)).not.toMatch(/[ .]/); // 23°N, 0°E
     expect(center(Math.PI)).toMatch(/[ .]/); // 23°N, 180°
   });
 
   it('spins eastward: features move left to right', () => {
     const render = createGlobe(options);
-    const row = (angle: number) => render(angle).split('\n')[12];
+    const row = (angle: number) => render(angle).text.split('\n')[12];
     // Africa is under the center at angle 0; after a small spin it should sit right of center.
     const landCols = (s: string) => [...s].flatMap((ch, i) => (/[ .]/.test(ch) ? [] : [i]));
     const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -120,7 +216,7 @@ describe('markers', () => {
     const x = (c + 0.5 - options.cols / 2) / (options.cols / 2);
     const y = -(r + 0.5 - options.rows / 2) / (options.rows / 2);
     const spot = unproject(x, y, angle, options.tilt)!;
-    const lines = render(angle, [spot]).split('\n');
+    const lines = render(angle, [spot]).text.split('\n');
     expect(lines[r][c]).toBe(MARKER);
     expect(lines.join('').split(MARKER)).toHaveLength(2);
   });
@@ -128,7 +224,7 @@ describe('markers', () => {
   it('hides markers on the far side', () => {
     const render = createGlobe(options, allOcean);
     const spot = unproject(0, 0, 0, options.tilt)!;
-    expect(render(0, [spot])).toContain(MARKER);
-    expect(render(Math.PI, [spot])).not.toContain(MARKER);
+    expect(render(0, [spot]).text).toContain(MARKER);
+    expect(render(Math.PI, [spot]).text).not.toContain(MARKER);
   });
 });

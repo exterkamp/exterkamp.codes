@@ -1,8 +1,25 @@
+import { cellCode, MARKER_CELL, NO_CELL, Terrain } from './globe-palette';
 import { LAND_BITS, LAND_HEIGHT, LAND_WIDTH } from './land-data';
+import { TERRAIN_BITS, TERRAIN_HEIGHT, TERRAIN_WIDTH } from './terrain-data';
 
 export interface Land {
   /** True if the given latitude/longitude (radians) is land. */
   isLand(lat: number, lon: number): boolean;
+}
+
+export interface TerrainMap {
+  /** What covers the given latitude/longitude (radians). Only meaningful where `Land` says land. */
+  terrainAt(lat: number, lon: number): Terrain;
+}
+
+/** One rendered frame. */
+export interface GlobeFrame {
+  /** The characters, with a newline after every row but the last. Built on first use. */
+  readonly text: string;
+  /** The same characters as char codes, with a newline after every row (the last one included). */
+  chars: Uint8Array;
+  /** A color code (see globe-palette) for each cell, row by row, with no newlines. */
+  colors: Uint8Array;
 }
 
 export interface GlobeOptions {
@@ -18,10 +35,14 @@ export interface GlobeOptions {
 
 const LAND_RAMP = ':-=+*#%@';
 const OCEAN = '.';
+const OCEAN_CODE = OCEAN.charCodeAt(0);
+const SPACE_CODE = ' '.charCodeAt(0);
+const NEWLINE_CODE = '\n'.charCodeAt(0);
 /** Floor on brightness so the night side stays visible and the globe keeps its round silhouette. */
 const AMBIENT = 0.3;
 /** Drawn over the globe where a note is attached. */
 export const MARKER = 'X';
+const MARKER_CODE = MARKER.charCodeAt(0);
 
 /** A spot on the globe, in degrees. */
 export interface Spot {
@@ -30,7 +51,7 @@ export interface Spot {
 }
 
 export const bitmapLand: Land = (() => {
-  const raw = atob(LAND_BITS);
+  const raw = Uint8Array.from(atob(LAND_BITS), (ch) => ch.charCodeAt(0));
   const rowBytes = Math.ceil(LAND_WIDTH / 8);
   return {
     isLand(lat, lon) {
@@ -38,18 +59,35 @@ export const bitmapLand: Land = (() => {
       const row = Math.floor(((Math.PI / 2 - lat) / Math.PI) * LAND_HEIGHT);
       const x = ((col % LAND_WIDTH) + LAND_WIDTH) % LAND_WIDTH;
       const y = Math.min(LAND_HEIGHT - 1, Math.max(0, row));
-      return ((raw.charCodeAt(y * rowBytes + (x >> 3)) >> (7 - (x & 7))) & 1) === 1;
+      return ((raw[y * rowBytes + (x >> 3)] >> (7 - (x & 7))) & 1) === 1;
+    },
+  };
+})();
+
+export const bitmapTerrain: TerrainMap = (() => {
+  const raw = Uint8Array.from(atob(TERRAIN_BITS), (ch) => ch.charCodeAt(0));
+  const rowBytes = Math.ceil(TERRAIN_WIDTH / 4);
+  return {
+    terrainAt(lat, lon) {
+      const col = Math.floor(((lon + Math.PI) / (2 * Math.PI)) * TERRAIN_WIDTH);
+      const row = Math.floor(((Math.PI / 2 - lat) / Math.PI) * TERRAIN_HEIGHT);
+      const x = ((col % TERRAIN_WIDTH) + TERRAIN_WIDTH) % TERRAIN_WIDTH;
+      const y = Math.min(TERRAIN_HEIGHT - 1, Math.max(0, row));
+      // The bitmap stores 0 = vegetation, 1 = desert, 2 = ice, which are Terrain's values less ocean's 0.
+      return 1 + ((raw[y * rowBytes + (x >> 2)] >> (6 - 2 * (x & 3))) & 3);
     },
   };
 })();
 
 interface Cell {
-  /** Position in view space, on the unit sphere. */
-  x: number;
-  y: number;
-  z: number;
+  /** Latitude (radians) of the globe's surface under this cell. Spinning only changes longitude. */
+  lat: number;
+  /** Longitude (radians) under this cell when the globe is at angle 0. */
+  lon: number;
   /** Diffuse brightness in [0, 1]. */
   light: number;
+  /** The shading character used if this cell is land. */
+  landChar: number;
 }
 
 /** Where a spot on the globe is in view space (x right, y up, z toward the viewer; z > 0 is the visible side). */
@@ -112,13 +150,15 @@ export function unproject(x: number, y: number, angle: number, tilt: number): Sp
 export function createGlobe(
   options: GlobeOptions,
   land: Land = bitmapLand,
-): (angle: number, markers?: readonly Spot[]) => string {
+  terrain: TerrainMap = bitmapTerrain,
+): (angle: number, markers?: readonly Spot[]) => GlobeFrame {
   const { cols, rows, tilt, light } = options;
   const lightLen = Math.hypot(...light);
   const [lx, ly, lz] = light.map((v) => v / lightLen);
   const sinTilt = Math.sin(tilt);
   const cosTilt = Math.cos(tilt);
 
+  // Everything that does not depend on the spin is worked out once, so a frame is mostly lookups.
   const cells: (Cell | null)[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -130,40 +170,57 @@ export function createGlobe(
         continue;
       }
       const z = Math.sqrt(1 - d2);
-      cells.push({ x, y, z, light: AMBIENT + (1 - AMBIENT) * Math.max(0, x * lx + y * ly + z * lz) });
+      const brightness = AMBIENT + (1 - AMBIENT) * Math.max(0, x * lx + y * ly + z * lz);
+      // Undo the tilt (rotate about x) to get into the globe's own frame.
+      const gy = y * cosTilt + z * sinTilt;
+      const gz = -y * sinTilt + z * cosTilt;
+      cells.push({
+        lat: Math.asin(Math.max(-1, Math.min(1, gy))),
+        lon: Math.atan2(x, gz),
+        light: brightness,
+        landChar: LAND_RAMP.charCodeAt(Math.min(LAND_RAMP.length - 1, Math.floor(brightness * LAND_RAMP.length))),
+      });
     }
   }
 
+  const rowLength = cols + 1;
   return (angle, markers = []) => {
-    const grid: string[] = [];
+    // Characters with a newline after every row; the last one is dropped from `text`.
+    const chars = new Uint8Array(rows * rowLength);
+    const colors = new Uint8Array(cols * rows);
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const cell = cells[r * cols + c];
+        const at = r * rowLength + c;
         if (!cell) {
-          grid.push(' ');
+          chars[at] = SPACE_CODE;
           continue;
         }
-        // Undo the tilt (rotate about x) to get into the globe's own frame.
-        const gy = cell.y * cosTilt + cell.z * sinTilt;
-        const gz = -cell.y * sinTilt + cell.z * cosTilt;
-        const lat = Math.asin(Math.max(-1, Math.min(1, gy)));
-        const lon = Math.atan2(cell.x, gz) - angle;
-        if (land.isLand(lat, lon)) {
-          grid.push(LAND_RAMP[Math.min(LAND_RAMP.length - 1, Math.floor(cell.light * LAND_RAMP.length))]);
+        const lon = cell.lon - angle;
+        if (land.isLand(cell.lat, lon)) {
+          chars[at] = cell.landChar;
+          colors[r * cols + c] = cellCode(terrain.terrainAt(cell.lat, lon), cell.light);
         } else {
-          grid.push(OCEAN);
+          chars[at] = OCEAN_CODE;
+          colors[r * cols + c] = cellCode(Terrain.Ocean, cell.light);
         }
       }
+      chars[r * rowLength + cols] = NEWLINE_CODE;
     }
     for (const marker of markers) {
       const cell = markerCell(marker, angle, tilt, cols, rows);
-      if (cell && cells[cell.row * cols + cell.col]) grid[cell.row * cols + cell.col] = MARKER;
+      if (cell && cells[cell.row * cols + cell.col]) {
+        chars[cell.row * rowLength + cell.col] = MARKER_CODE;
+        colors[cell.row * cols + cell.col] = MARKER_CELL;
+      }
     }
-    let out = '';
-    for (let r = 0; r < rows; r++) {
-      out += grid.slice(r * cols, (r + 1) * cols).join('');
-      if (r < rows - 1) out += '\n';
-    }
-    return out;
+    let text: string | undefined;
+    return {
+      get text() {
+        return (text ??= String.fromCharCode(...chars.subarray(0, chars.length - 1)));
+      },
+      chars,
+      colors,
+    };
   };
 }
