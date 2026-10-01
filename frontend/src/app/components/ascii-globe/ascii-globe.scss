@@ -7,6 +7,78 @@
   padding: 0 1rem;
 }
 
+.stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 44rem;
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  width: 100%;
+  // Leave room for the line to run from the panel down to the globe.
+  margin-bottom: 1.5rem;
+}
+
+.panel {
+  // Same height for every slot, whether or not it holds a note, so the page doesn't jump.
+  min-height: 4.5em;
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid rgb(241, 16, 16);
+  border-radius: 0.375rem;
+  background: Canvas;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  transition: opacity 0.3s;
+
+  &.active {
+    opacity: 1;
+  }
+}
+
+// Drawn over the globe, but never in the way of clicks or drags.
+.links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.link {
+  stroke: rgb(241, 16, 16);
+  opacity: 0;
+  transition: opacity 0.3s;
+
+  &.active {
+    opacity: 1;
+  }
+
+  line {
+    stroke-width: 1;
+  }
+
+  circle {
+    fill: none;
+    stroke-width: 1.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .link {
+    transition: none;
+  }
+}
+
 .globe {
   margin: 0;
   font-family: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
@@ -33,13 +105,6 @@
   margin-top: 0.75rem;
   max-width: 100%;
   text-align: center;
-}
-
-.note {
-  // Reserve a line so the page doesn't jump as notes rotate in and out.
-  min-height: 1.5em;
-  margin: 0;
-  overflow-wrap: anywhere;
 }
 
 .note-form {

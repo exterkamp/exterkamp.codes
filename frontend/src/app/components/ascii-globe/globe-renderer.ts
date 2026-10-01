@@ -65,6 +65,25 @@ export function project(spot: Spot, angle: number, tilt: number): { x: number; y
 }
 
 /**
+ * The character cell a spot is drawn in, or null if it is on the far side of the globe.
+ * Matches where `createGlobe` places markers.
+ */
+export function markerCell(
+  spot: Spot,
+  angle: number,
+  tilt: number,
+  cols: number,
+  rows: number,
+): { col: number; row: number } | null {
+  const p = project(spot, angle, tilt);
+  if (p.z <= 0) return null;
+  return {
+    col: Math.floor((p.x * cols) / 2 + cols / 2),
+    row: Math.floor((-p.y * rows) / 2 + rows / 2),
+  };
+}
+
+/**
  * The latitude/longitude (degrees) under a point on the globe's disc, or null if the point is
  * off the globe. `x` and `y` are in view space, scaled so the globe's edge is at distance 1
  * (x right, y up). This is the inverse of how `createGlobe` places each cell.
@@ -137,11 +156,8 @@ export function createGlobe(
       }
     }
     for (const marker of markers) {
-      const p = project(marker, angle, tilt);
-      if (p.z <= 0) continue;
-      const c = Math.floor((p.x * cols) / 2 + cols / 2);
-      const r = Math.floor((-p.y * rows) / 2 + rows / 2);
-      if (cells[r * cols + c]) grid[r * cols + c] = MARKER;
+      const cell = markerCell(marker, angle, tilt, cols, rows);
+      if (cell && cells[cell.row * cols + cell.col]) grid[cell.row * cols + cell.col] = MARKER;
     }
     let out = '';
     for (let r = 0; r < rows; r++) {

@@ -217,21 +217,40 @@ describe('AsciiGlobe', () => {
       vi.unstubAllGlobals();
     });
 
-    it('loads saved notes, marks the visible ones and shows only the one nearest the center', async () => {
+    const panelTexts = () =>
+      [...fixture.nativeElement.querySelectorAll('.panel.active')].map((p: Element) => p.textContent!.trim());
+
+    it('loads saved notes, marks the visible ones and shows the 3 nearest the center in panels', async () => {
       // At angle 0 the center of the globe is (lat 23.4, lon 0).
       await setup([
         note(1, 23.4, 0, 'dead center'),
         note(2, 23.4, 40, 'off to the side'),
         note(3, 23.4, 180, 'on the far side'),
+        note(4, 23.4, -20, 'a bit left'),
+        note(5, 23.4, 60, 'further right'),
       ]);
-      expect(markerCount()).toBe(2);
-      expect(el('.note').textContent.trim()).toBe('dead center');
+      expect(markerCount()).toBe(4);
+      expect(panelTexts().sort()).toEqual(['a bit left', 'dead center', 'off to the side']);
+    });
+
+    it('draws a line from each active panel to the center of its marker cell', async () => {
+      await setup([note(1, 23.4, 0, 'dead center')]);
+      const line: SVGLineElement = el('.link.active line');
+      // 61 columns and 37 rows over 300x180 px: the center cell (30, 18) is centered at ...
+      expect(Number(line.getAttribute('x2'))).toBeCloseTo(((30 + 0.5) / 61) * 300);
+      expect(Number(line.getAttribute('y2'))).toBeCloseTo(((18 + 0.5) / 37) * 180);
+      expect(Number(el('.link.active circle').getAttribute('cx'))).toBeCloseTo(Number(line.getAttribute('x2')));
     });
 
     it('shows note text as plain text, never HTML', async () => {
       await setup([note(1, 23.4, 0, '<img src=x onerror=alert(1)>')]);
-      expect(el('.note').textContent.trim()).toBe('<img src=x onerror=alert(1)>');
-      expect(el('.note img')).toBeNull();
+      expect(panelTexts()).toEqual(['<img src=x onerror=alert(1)>']);
+      expect(el('.panel img')).toBeNull();
+    });
+
+    it('leaves clicks and drags to the globe', async () => {
+      await setup([note(1, 23.4, 0, 'dead center')]);
+      expect(getComputedStyle(el('.links')).pointerEvents).toBe('none');
     });
 
     it('opens a prompt for the spot under a click', async () => {
@@ -275,7 +294,7 @@ describe('AsciiGlobe', () => {
 
       expect(el('form')).toBeNull();
       expect(markerCount()).toBe(1);
-      expect(el('.note').textContent.trim()).toBe('hello world');
+      expect(panelTexts()).toEqual(['hello world']);
 
       const spot = unproject(0, 1 / 3, 0, (23.4 * Math.PI) / 180)!;
       const req = http.expectOne('/api/notes');
@@ -286,7 +305,7 @@ describe('AsciiGlobe', () => {
       req.flush(note(7, spot.lat, spot.lon, 'hello world'));
       fixture.detectChanges();
       expect(markerCount()).toBe(1);
-      expect(el('.note').textContent.trim()).toBe('hello world');
+      expect(panelTexts()).toEqual(['hello world']);
     });
 
     it('does not post an empty note, and can be cancelled', async () => {

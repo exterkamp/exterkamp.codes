@@ -1,13 +1,24 @@
-<pre #globe class="globe" aria-hidden="true"></pre>
+<div #stage class="stage">
+  <!-- Note text is user-supplied: only ever bound as text, never as HTML. -->
+  <div class="panels">
+    @for (note of shown(); track $index) {
+      <p class="panel" [class.active]="slots()[$index]">{{ note?.text }}</p>
+    }
+  </div>
+
+  <pre #globe class="globe" aria-hidden="true"></pre>
+
+  <svg class="links" aria-hidden="true">
+    @for (note of shown(); track $index) {
+      <g class="link" [class.active]="slots()[$index]">
+        <line />
+        <circle r="4" />
+      </g>
+    }
+  </svg>
+</div>
 
 <div class="notes">
-  <!-- Note text is user-supplied: only ever bound as text, never as HTML. -->
-  <p class="note" aria-live="polite">
-    @if (featured(); as note) {
-      {{ note.text }}
-    }
-  </p>
-
   @if (pending(); as spot) {
     <form class="note-form" (submit)="$event.preventDefault(); save(noteInput.value)" (keydown.escape)="cancel()">
       <label>
