@@ -1,3 +1,5 @@
+import { LineCell, placeConstellations, PlacedConstellation } from './constellations';
+
 /** The dark ASCII space behind the globe: a full-width band of cells that fades in from the white page at the top and out at the bottom, with a few stars. */
 
 export interface SpaceOptions {
@@ -17,6 +19,18 @@ export interface SpaceOptions {
   clear: { col: number; row: number; rx: number; ry: number };
 }
 
+/** A cell of the solid interior that is drawn on its own, so CSS can color or animate it. */
+export interface SpaceMark {
+  row: number;
+  col: number;
+  char: string;
+  kind: 'twinkle' | 'glitter' | 'constellation-star' | 'constellation-line';
+  /** Seconds one animation cycle lasts (twinkle and glitter only). */
+  duration?: number;
+  /** Seconds into the cycle where this star starts, so no two share a rhythm (twinkle and glitter only). */
+  delay?: number;
+}
+
 export interface Space {
   cols: number;
   rows: number;
@@ -24,7 +38,20 @@ export interface Space {
   levels: Float32Array;
   /** The star in each cell, or ' '. Only cells at level 1 have one: the solid interior, and fade cells the noise pushed all the way up. */
   glyphs: string[];
+  /** The interior's cells that animate or belong to a constellation, by row then column. `glyphs` holds their characters too. */
+  marks: SpaceMark[];
+  /** The figures that fit this width. */
+  constellations: PlacedConstellation[];
 }
+
+/** Share of stars that twinkle, and that glitter. The rest stay still. */
+export const TWINKLE_SHARE = 0.15;
+export const GLITTER_SHARE = 0.03;
+/** Seconds one cycle lasts: a twinkle fades dim and bright over it, a glitter flashes once in it. */
+export const TWINKLE_SECONDS = { min: 3, max: 9 };
+export const GLITTER_SECONDS = { min: 6, max: 14 };
+/** Most elements that animate at once. */
+export const MAX_ANIMATED = 200;
 
 export const STAR_GLYPHS = ".'*+";
 
@@ -62,6 +89,7 @@ export function createSpace(options: SpaceOptions): Space {
   const { cols, rows, fadeTop, fadeBottom, starChance, clear, seed, centerCol } = options;
   const levels = new Float32Array(cols * rows);
   const glyphs: string[] = new Array(cols * rows).fill(' ');
+  const motion = new Map<number, SpaceMark>();
   for (let r = 0; r < rows; r++) {
     const rowDensity = density(r, rows, fadeTop, fadeBottom);
     for (let c = 0; c < cols; c++) {
@@ -72,7 +100,27 @@ export function createSpace(options: SpaceOptions): Space {
       if (levels[i] < 1) continue;
       const inGlobe = Math.hypot((c + 0.5 - clear.col) / clear.rx, (r + 0.5 - clear.row) / clear.ry) <= 1;
       if (!inGlobe && cellRandom(seed, r, dc, 1) < starChance) glyphs[i] = STAR_GLYPHS[Math.floor(cellRandom(seed, r, dc, 2) * STAR_GLYPHS.length)];
+      if (glyphs[i] === ' ' || r < fadeTop || r >= rows - fadeBottom || motion.size >= MAX_ANIMATED) continue;
+      // Which stars move, and how, comes from the cell's own hash, so it is the same on every load and at every width.
+      const pick = cellRandom(seed, r, dc, 3);
+      const kind = pick < TWINKLE_SHARE ? 'twinkle' : pick < TWINKLE_SHARE + GLITTER_SHARE ? 'glitter' : null;
+      if (!kind) continue;
+      const range = kind === 'twinkle' ? TWINKLE_SECONDS : GLITTER_SECONDS;
+      const duration = range.min + cellRandom(seed, r, dc, 4) * (range.max - range.min);
+      motion.set(i, { row: r, col: c, char: glyphs[i], kind, duration, delay: cellRandom(seed, r, dc, 5) * duration });
     }
   }
-  return { cols, rows, levels, glyphs };
+  const constellations = placeConstellations({ cols, rows, fadeTop, fadeBottom, centerCol, clear });
+  const draw = (cell: LineCell, kind: SpaceMark['kind']) => {
+    const i = cell.row * cols + cell.col;
+    glyphs[i] = cell.char;
+    motion.set(i, { row: cell.row, col: cell.col, char: cell.char, kind });
+  };
+  // A figure replaces whatever star was in its cell.
+  for (const figure of constellations) {
+    for (const line of figure.lines) draw(line, 'constellation-line');
+    for (const star of figure.stars) draw({ ...star, char: '*' }, 'constellation-star');
+  }
+  const marks = [...motion.values()].sort((a, b) => a.row - b.row || a.col - b.col);
+  return { cols, rows, levels, glyphs, marks, constellations };
 }
