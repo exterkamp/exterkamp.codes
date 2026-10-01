@@ -200,6 +200,7 @@ describe('AsciiGlobe', () => {
       await fixture.whenStable();
       pre = el('pre');
       pre.getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 180 }) as DOMRect;
+      el('.stage').getBoundingClientRect = () => ({ left: 0, top: 0, width: 700, height: 180 }) as DOMRect;
       http.expectOne('/api/notes').flush(existing);
       fixture.detectChanges();
     };

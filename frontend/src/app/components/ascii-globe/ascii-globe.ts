@@ -1,6 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import {
   afterNextRender,
+  ChangeDetectorRef,
   Component,
   DestroyRef,
   ElementRef,
@@ -10,7 +11,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { createGlobe, markerCell, project, Spot, unproject } from './globe-renderer';
-import { assignSlots, cellCenter, advancePanels, layoutPanels, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, sameSlots, Slots } from './note-panels';
+import { assignSlots, cellCenter, advancePanels, layoutLanes, LANES, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, placementRank, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 
 const COLS = 61;
@@ -30,6 +31,8 @@ const MAX_SPEED = 4 * Math.PI;
 const CLICK_SLOP = 5;
 /** A press held longer than this (ms) is a drag, or a hold, not a click. */
 const CLICK_MAX_MS = 500;
+/** How long (ms) a note whose panel had no clear spot waits before it is tried again. */
+const BLOCKED_RETRY_MS = 400;
 
 @Component({
   selector: 'app-ascii-globe',
@@ -42,6 +45,7 @@ export class AsciiGlobe {
   private readonly noteInput = viewChild<ElementRef<HTMLInputElement>>('noteInput');
   private readonly notesService = inject(NotesService);
   private readonly injector = inject(Injector);
+  private readonly changeDetector = inject(ChangeDetectorRef);
 
   protected readonly maxLength = MAX_NOTE_LENGTH;
   private notes: Note[] = [];
@@ -50,6 +54,8 @@ export class AsciiGlobe {
   /** Where each shown panel is now (eased toward its target), and which spot it took, by note id. */
   private panelPositions = new Map<number, PanelState>();
   private lastPanelTime = 0;
+  /** Notes whose panel had no clear spot, and when (ms) they may be tried again, so they don't flicker on and off. */
+  private blockedUntil = new Map<number, number>();
 
   /** Where the visitor clicked, while the note form is open. */
   protected readonly pending = signal<Spot | null>(null);
@@ -85,14 +91,21 @@ export class AsciiGlobe {
     });
   }
 
+  private setSlots(slots: Slots) {
+    if (sameSlots(slots, this.activeSlots)) return;
+    this.activeSlots = slots;
+    this.slots.set(slots);
+    this.shown.update((shown) => shown.map((n, i) => slots[i] ?? n));
+    // Render now, so a slot that took a new note has the new text (and size) before panels are placed, not a frame later.
+    this.changeDetector.detectChanges();
+  }
+
   /** Picks the notes for the panels, then sets each panel beside its marker with a line between them. */
   private updatePanels(angle: number) {
-    const slots = assignSlots(this.activeSlots, nearestInZone(this.notes, angle, TILT, this.activeSlots));
-    if (!sameSlots(slots, this.activeSlots)) {
-      this.activeSlots = slots;
-      this.slots.set(slots);
-      this.shown.update((shown) => shown.map((n, i) => slots[i] ?? n));
-    }
+    const now = performance.now();
+    const candidates = this.notes.filter((n) => (this.blockedUntil.get(n.id) ?? 0) <= now);
+    this.setSlots(assignSlots(this.activeSlots, nearestInZone(candidates, angle, TILT, this.activeSlots)));
+    const slots = this.activeSlots;
 
     const stage = this.stage().nativeElement;
     const stageRect = stage.getBoundingClientRect();
@@ -111,23 +124,29 @@ export class AsciiGlobe {
     const items = this.shown()
       .map((note, i) => ({ i, note, active: !!slots[i], end: note && markerCell(note, angle, TILT, COLS, ROWS) }))
       .flatMap((item) => (item.end && item.note ? [{ ...item, id: item.note.id, end: cellCenter(item.end, COLS, ROWS, box) }] : []))
-      .sort((a, b) => Number(b.active) - Number(a.active) || Number(this.panelPositions.has(b.id)) - Number(this.panelPositions.has(a.id)));
+      .sort((a, b) => Number(b.active) - Number(a.active) || placementRank(this.panelPositions, a.id) - placementRank(this.panelPositions, b.id));
     // Panels are placed by where the dot truly is, not the character cell it is drawn in, whose
     // position steps a whole row at a time. Only the line ends on the drawn cell.
     const pins = items.map((item) => pinPoint(project(item.note!, angle, TILT), box));
-    const targets = layoutPanels(
-      pins,
-      items.map((item) => ({ width: panels[item.i].offsetWidth, height: panels[item.i].offsetHeight })),
-      { width: stageRect.width, height: stageRect.height },
+    const laneTops = LANES.map((lane) => box.top + lane.top * box.height);
+    const targets = layoutLanes(
+      items.map((item, n) => ({ pin: pins[n], size: { width: panels[item.i].offsetWidth, height: panels[item.i].offsetHeight }, lat: item.note!.lat })),
+      laneTops,
+      { width: stageRect.width },
+      items.map((item) => this.panelPositions.get(item.id)),
       PANEL_GAP,
-      { x: box.left + box.width / 2, y: box.top + box.height / 2, r: Math.min(box.width, box.height) / 2 },
-      items.map((item) => this.panelPositions.get(item.id)?.key),
+      now / 1000,
     );
-    const now = performance.now();
     const dt = Math.min(now - this.lastPanelTime, 100) / 1000;
     this.lastPanelTime = now;
     // With reduced motion, panels stay exactly on their targets instead of easing.
     const snap = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    // A panel with no clear spot stops being shown, and is not tried again for a moment.
+    const blocked = items.filter((item, n) => item.active && targets[n].blocked);
+    if (blocked.length) {
+      blocked.forEach((item) => this.blockedUntil.set(item.id, now + BLOCKED_RETRY_MS));
+      this.setSlots(this.activeSlots.map((n) => (n && blocked.some((b) => b.id === n.id) ? null : n)));
+    }
     this.panelPositions = advancePanels(this.panelPositions, items.map((item) => item.id), targets, dt, snap);
     const rects = items.map((item) => this.panelPositions.get(item.id)!.rect);
     items.forEach(({ i, end }, n) => {

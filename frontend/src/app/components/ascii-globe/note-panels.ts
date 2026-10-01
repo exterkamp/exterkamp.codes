@@ -15,11 +15,7 @@ export const PANEL_GAP = 28;
 /** Seconds for a panel to close all but a factor of 1/e of the distance to its target spot. */
 export const PANEL_TAU = 0.1;
 /** Fastest a panel may move (pixels per second), so a change of spot is a glide, never a jump. A pin itself moves far slower. */
-export const PANEL_MAX_SPEED = 150;
-/** Cost per pixel of the line from a panel to its pin. */
-const LINE_WEIGHT = 0.3;
-/** Cost bonus for staying on the spot (side and stack slot) a panel had last frame, so near-ties don't flip it. */
-export const STICKY_BONUS = 40;
+export const PANEL_MAX_SPEED = 360;
 
 // On the unit sphere, z is the cosine of the angle from the point facing the viewer.
 const withinDegrees = (z: number, degrees: number) => z >= Math.cos((degrees * Math.PI) / 180) - 1e-9;
@@ -67,22 +63,6 @@ const overlap = (a: Rect, b: Rect) =>
   Math.max(0, Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left)) *
   Math.max(0, Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top));
 
-export interface Disc {
-  x: number;
-  y: number;
-  r: number;
-}
-
-/** How far into the globe's disc a panel may reach, in pixels. */
-export const DISC_OVERLAP = 4;
-
-/** How far a rectangle reaches into a disc (0 when it is clear of it). */
-const intrusion = (rect: Rect, disc: Disc) => {
-  const x = Math.max(rect.left, Math.min(disc.x, rect.left + rect.width));
-  const y = Math.max(rect.top, Math.min(disc.y, rect.top + rect.height));
-  return Math.max(0, disc.r - Math.hypot(x - disc.x, y - disc.y));
-};
-
 const inside = (rect: Rect, p: { x: number; y: number }, pad = 0) =>
   p.x >= rect.left - pad && p.x <= rect.left + rect.width + pad && p.y >= rect.top - pad && p.y <= rect.top + rect.height + pad;
 
@@ -110,105 +90,149 @@ const segmentHits = (rect: Rect, a: { x: number; y: number }, b: { x: number; y:
   return t0 <= t1;
 };
 
-/**
- * Places a panel beside each marker, inside `bounds` (whose top-left is the origin). Panels are
- * placed in order. Each tries spots next to its marker and, when given the globe's `disc`, spots
- * just outside the globe in the marker's direction, shifted up or down in turn, and takes the
- * cheapest: no overlap with other panels, no line or marker of another panel running under it, no
- * more than a sliver over the globe, then the least displacement.
- */
-export function placePanels(
-  markers: readonly { x: number; y: number }[],
-  sizes: readonly { width: number; height: number }[],
-  bounds: { width: number; height: number },
-  gap = PANEL_GAP,
-  disc?: Disc,
-): Rect[] {
-  return layoutPanels(markers, sizes, bounds, gap, disc).map((p) => p.rect);
+/** A lane's latitude band runs from `minLat` up to the next lane's `minLat` (the first lane runs to the north pole). */
+export interface Lane {
+  name: string;
+  /** Southern edge of the band, in degrees of latitude. */
+  minLat: number;
+  /** Panel top edge, as a fraction of the globe's height measured from its top. */
+  top: number;
+}
+
+/** Lanes from north to south. A note's panel sits in the lane whose band holds the note's latitude. */
+export const LANES: readonly Lane[] = [
+  { name: 'north', minLat: 30, top: 0.04 },
+  { name: 'middle', minLat: -30, top: 0.33 },
+  { name: 'south', minLat: -90, top: 0.62 },
+];
+/** A note this many degrees past its lane's band edge still keeps that lane. */
+export const LANE_HYSTERESIS = 5;
+/** Longest allowed line from a panel to its pin, in pixels. */
+export const MAX_LINE = 160;
+/** Most a panel may move horizontally in one frame at 60fps while keeping to its lane, in pixels. */
+export const MAX_STEP_X = 12;
+/** Space kept between panels, and around pins, in pixels. */
+const PANEL_MARGIN = 4;
+/** Extra room a lane needs before a panel moves back to it from a neighbor, so it doesn't flap. */
+const RETURN_MARGIN = 12;
+/** Seconds a panel stays in a neighboring lane before it may go back home, so it doesn't flap between two. */
+export const LANE_HOLD = 2;
+
+/** The lane for a latitude. `previous`, the lane the note was in, is kept while the latitude is within the hysteresis of its band. */
+export function laneFor(lat: number, previous?: number, lanes: readonly Lane[] = LANES): number {
+  if (previous !== undefined && lanes[previous]) {
+    const north = previous === 0 ? Infinity : lanes[previous - 1].minLat;
+    if (lat >= lanes[previous].minLat - LANE_HYSTERESIS && lat < north + LANE_HYSTERESIS) return previous;
+  }
+  const i = lanes.findIndex((l) => lat >= l.minLat);
+  return i < 0 ? lanes.length - 1 : i;
+}
+
+export interface LaneInput {
+  /** Where the pin is, in stage pixels. */
+  pin: { x: number; y: number };
+  size: { width: number; height: number };
+  /** Latitude of the note, in degrees. */
+  lat: number;
+}
+
+export interface LaneState {
+  /** The lane the note's latitude belongs in. */
+  home: number;
+  /** The lane the panel is in now: home, or a neighbor while another panel holds home. */
+  lane: number;
+  /** Which side of its pin the panel is on: 1 right, -1 left. */
+  side: 1 | -1;
+  /** Seconds (on the caller's clock) when the panel last changed lane or side. */
+  since: number;
+}
+
+export interface LanePlacement extends LaneState {
+  rect: Rect;
+  /** Changes when the panel changes lane or side, so easing glides instead of following. */
+  key: string;
+  /** True when no lane or side is clear: the panel should not be shown, and does not hold its place against the others. */
+  blocked: boolean;
 }
 
 /**
- * Like `placePanels`, but also says which candidate spot each panel took. Passing those keys back
- * as `sticky` on the next frame makes a panel keep its spot unless another is clearly cheaper.
+ * Puts each panel in its latitude's lane, `gap` pixels to one side of its pin. Its height is the
+ * lane's `laneTops` entry and never otherwise changes; it only follows its pin sideways. A panel
+ * keeps its side until the other is the only one with room. Panels are placed in order. When
+ * a panel would overlap one already placed, sit on another panel's pin, run its line under
+ * another, or be too far from its pin, it takes a neighboring lane, and goes home once that is
+ * clear with some room to spare. A panel with no clear lane or side comes back `blocked`.
  */
-export function layoutPanels(
-  markers: readonly { x: number; y: number }[],
-  sizes: readonly { width: number; height: number }[],
-  bounds: { width: number; height: number },
+export function layoutLanes(
+  items: readonly LaneInput[],
+  laneTops: readonly number[],
+  bounds: { width: number },
+  previous: readonly (Partial<LaneState> | undefined)[] = [],
   gap = PANEL_GAP,
-  disc?: Disc,
-  sticky: readonly (string | undefined)[] = [],
-): { rect: Rect; key: string }[] {
-  const placed: Rect[] = [];
-  const keys: string[] = [];
+  now = 0,
+): LanePlacement[] {
+  const placed: LanePlacement[] = [];
   const lines: { from: { x: number; y: number }; to: { x: number; y: number } }[] = [];
-  markers.forEach((m, i) => {
-    const { width: w, height: h } = sizes[i];
-    // Beside the marker first, then the same sides shifted up and down by whole panel heights,
-    // so a crowd of panels can stack instead of overlapping.
-    const steps = [0, -1, 1, -2, 2, -3, 3];
-    const shifts = steps.map((k) => k * (h + 4));
-    const sides = [m.x + gap, m.x - gap - w];
-    const candidates = [
-      ...steps.flatMap((k, s) => sides.map((left, side) => ({ left, top: m.y - h / 2 + shifts[s], dy: shifts[s], key: `side${side}:${k}` }))),
-      { left: m.x - w / 2, top: m.y - gap - h, dy: 0, key: 'above' },
-      { left: m.x - w / 2, top: m.y + gap, dy: 0, key: 'below' },
-    ];
-    if (disc) {
-      // Just outside the globe, on the side the marker is on, level with the marker or stacked above/below.
-      // Either side of the globe is a candidate, so a panel can stay where it is as its marker crosses the middle.
-      for (const sign of [1, -1]) steps.forEach((k, s) => {
-        const dy = shifts[s];
-        const top = m.y - h / 2 + dy;
-        // The rectangle's corner nearest the globe's center sits on this row; find the globe's edge there.
-        const row = Math.max(top, Math.min(disc.y, top + h));
-        const half = Math.sqrt(Math.max(0, disc.r * disc.r - (row - disc.y) ** 2));
-        const edge = disc.x + sign * (half - DISC_OVERLAP / 2);
-        candidates.push({ left: sign > 0 ? edge : edge - w, top, dy, key: `disc${sign}:${k}` });
+  items.forEach((item, i) => {
+    const { pin, size } = item;
+    const before = previous[i];
+    const home = laneFor(item.lat, before?.home);
+    const beforeLane = before?.lane;
+    const fits = (side: 1 | -1) => {
+      const left = side > 0 ? pin.x + gap : pin.x - gap - size.width;
+      return left >= 0 && left + size.width <= bounds.width;
+    };
+    const leftFor = (side: 1 | -1) => Math.max(0, Math.min(side > 0 ? pin.x + gap : pin.x - gap - size.width, bounds.width - size.width));
+    let side: 1 | -1 = before?.side ?? (pin.x < bounds.width / 2 ? 1 : -1);
+    if (!fits(side) && fits(-side as 1 | -1)) side = -side as 1 | -1;
+    const rectIn = (lane: number, s: 1 | -1): Rect => ({ left: leftFor(s), top: laneTops[lane], width: size.width, height: size.height });
+    // How many rules a panel in this lane and side would break, with `pad` pixels of room around it.
+    const trouble = (lane: number, s: 1 | -1, pad: number) => {
+      const rect = rectIn(lane, s);
+      const line = { from: nearestEdgePoint(rect, pin), to: pin };
+      let n = Math.hypot(line.from.x - pin.x, line.from.y - pin.y) > MAX_LINE ? 1 : 0;
+      items.forEach((other, j) => {
+        if (inside(rect, other.pin, pad)) n++;
+        const p = placed[j];
+        if (!p || p.blocked || j === i) return;
+        if (overlap({ ...rect, left: rect.left - pad, top: rect.top - pad, width: rect.width + 2 * pad, height: rect.height + 2 * pad }, p.rect) > 0) n++;
+        if (segmentHits(rect, lines[j].from, lines[j].to)) n++;
+        if (segmentHits(p.rect, line.from, line.to)) n++;
       });
-    }
-    let best: Rect | null = null;
-    let bestKey = '';
-    let bestCost = Infinity;
-    for (const c of candidates) {
-      // Clamp into bounds (the panel is pinned to the left/top edge if it is bigger than the bounds).
-      const rect = {
-        width: w,
-        height: h,
-        left: Math.max(0, Math.min(c.left, bounds.width - w)),
-        top: Math.max(0, Math.min(c.top, bounds.height - h)),
-      };
-      const line = { from: nearestEdgePoint(rect, m), to: m };
-      let cost = 0;
-      // No panel may sit on any other note's marker, placed yet or not.
-      markers.forEach((other, j) => {
-        if (j !== i && inside(rect, other, 2)) cost += 1e5;
-      });
-      placed.forEach((p, j) => {
-        const area = overlap(rect, p);
-        if (area > 0) cost += 1e5 + area * 10;
-        // Neither panel may sit on the other's line, or on the other's marker.
-        if (segmentHits(rect, lines[j].from, lines[j].to)) cost += 1e4;
-        if (segmentHits(p, line.from, line.to)) cost += 1e4;
-      });
-      if (inside(rect, m)) cost += 1e6;
-      if (disc) cost += Math.max(0, intrusion(rect, disc) - DISC_OVERLAP) * 50 + intrusion(rect, disc) * 2;
-      // Displacement from the ideal spot, and a preference for staying level with the marker.
-      cost += Math.hypot(rect.left - c.left, rect.top - c.top) + Math.abs(c.dy) * 0.5;
-      // A long line is worse than a short one, so a panel moves to the nearer side only once it is clearly nearer.
-      cost += Math.hypot(line.from.x - m.x, line.from.y - m.y) * LINE_WEIGHT;
-      if (c.key === sticky[i]) cost -= STICKY_BONUS;
-      if (cost < bestCost) {
-        best = rect;
-        bestKey = c.key;
-        bestCost = cost;
+      return n;
+    };
+    const nearHome = laneTops.map((_, l) => l).sort((a, b) => Math.abs(a - home) - Math.abs(b - home) || a - b);
+    const current = beforeLane ?? home;
+    const away = current !== home;
+    const other = -side as 1 | -1;
+    let lane = current;
+    if (away && now - (before?.since ?? -Infinity) >= LANE_HOLD && trouble(home, side, RETURN_MARGIN) === 0) {
+      lane = home;
+    } else if (trouble(current, side, before ? 0 : PANEL_MARGIN) > 0) {
+      // Look for a clear lane, with some room around the panel; then, if that fails, with none.
+      // Failing that the panel may take the other side of its pin (a glide, since its key changes).
+      let found: { lane: number; side: 1 | -1 } | undefined;
+      for (const pad of [PANEL_MARGIN, 0]) {
+        for (const s of fits(other) ? [side, other] : [side]) {
+          const l = nearHome.find((l) => trouble(l, s, pad) === 0);
+          if (l !== undefined) found ??= { lane: l, side: s };
+        }
+        if (found) break;
+      }
+      if (found) {
+        lane = found.lane;
+        side = found.side;
+      } else {
+        // Nowhere is clear: the lane with the least trouble, nearest home. It comes back blocked.
+        lane = nearHome.reduce((best, l) => (trouble(l, side, 0) < trouble(best, side, 0) ? l : best), home);
       }
     }
-    placed.push(best!);
-    keys.push(bestKey);
-    lines.push({ from: nearestEdgePoint(best!, m), to: m });
+    const rect = rectIn(lane, side);
+    const since = before && before.lane === lane && before.side === side && before.since !== undefined ? before.since : now;
+    placed.push({ rect, key: `${lane}:${side}`, home, lane, side, since, blocked: trouble(lane, side, 0) > 0 });
+    lines.push({ from: nearestEdgePoint(rect, pin), to: pin });
   });
-  return placed.map((rect, i) => ({ rect, key: keys[i] }));
+  return placed;
 }
 
 /**
@@ -227,7 +251,7 @@ export function easeRect(previous: Rect | undefined, target: Rect, dt: number, t
   return { ...target, left: previous.left + dx * cap, top: previous.top + dy * cap };
 }
 
-export type PanelState = { rect: Rect; target: Rect; key: string };
+export type PanelState = { rect: Rect; target: Rect; key: string } & Partial<LaneState>;
 
 /**
  * One frame of easing for every panel: each moves from where it was toward its new target
@@ -237,7 +261,7 @@ export type PanelState = { rect: Rect; target: Rect; key: string };
 export function advancePanels(
   previous: ReadonlyMap<number, PanelState>,
   ids: readonly number[],
-  targets: readonly { rect: Rect; key: string }[],
+  targets: readonly ({ rect: Rect; key: string } & Partial<LaneState>)[],
   dt: number,
   snap = false,
 ): Map<number, PanelState> {
@@ -246,9 +270,19 @@ export function advancePanels(
     const before = previous.get(id);
     const t = targets[n];
     const allowance = before && before.key === t.key ? Math.hypot(t.rect.left - before.target.left, t.rect.top - before.target.top) : 0;
-    next.set(id, { rect: easeRect(snap ? undefined : before?.rect, t.rect, dt, PANEL_TAU, allowance), target: t.rect, key: t.key });
+    next.set(id, { ...t, rect: easeRect(snap ? undefined : before?.rect, t.rect, dt, PANEL_TAU, allowance), target: t.rect });
   });
   return next;
+}
+
+/**
+ * Where a panel was placed last frame in `previous`, which is in placement order: panels already
+ * showing come in the order they were placed, then newcomers. Placing them in that same order every
+ * frame means a panel placed later never takes a lane from one placed earlier, which would flap.
+ */
+export function placementRank(previous: ReadonlyMap<number, unknown>, id: number): number {
+  const rank = [...previous.keys()].indexOf(id);
+  return rank < 0 ? Infinity : rank;
 }
 
 /** Where a spot at view-space (x right, y up) is, in the same pixels as `cellCenter`, but not snapped to a character cell. */
