@@ -273,7 +273,7 @@ describe('AsciiGlobe', () => {
       pre = el('pre');
       pre.getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 180 }) as DOMRect;
       el('.stage').getBoundingClientRect = () => ({ left: 0, top: 0, width: 700, height: 180 }) as DOMRect;
-      http.expectOne('/api/notes').flush(existing);
+      http.expectOne('/api/notes/rotation').flush(existing);
       fixture.detectChanges();
     };
 
@@ -432,10 +432,283 @@ describe('AsciiGlobe', () => {
       fixture = TestBed.createComponent(AsciiGlobe);
       http = TestBed.inject(HttpTestingController);
       await fixture.whenStable();
-      http.expectOne('/api/notes').flush('nope', { status: 500, statusText: 'Server Error' });
+      http.expectOne('/api/notes/rotation').flush('nope', { status: 500, statusText: 'Server Error' });
       fixture.detectChanges();
       expect(el('pre').textContent.length).toBeGreaterThan(100);
       expect(el('.note-error')).toBeNull();
+    });
+  });
+  describe('rotation', () => {
+    // Each frame redraws the whole globe in jsdom, so a minute of spin takes a while.
+    const slow = (name: string, fn: () => Promise<void>) => it(name, fn, 120_000);
+    const ROTATION = '/api/notes/rotation';
+    const SPIN = (2 * Math.PI) / 30;
+    const TILT = (23.4 * Math.PI) / 180;
+    const STEP = 100;
+    let fixture: ComponentFixture<AsciiGlobe>;
+    let http: HttpTestingController;
+    let pre: HTMLPreElement;
+    let now: number;
+    let frames: FrameRequestCallback[] = [];
+    let angle: number;
+    let requests: { request: { params: { get: (k: string) => string | null } }; flush: (b: unknown, o?: object) => void }[];
+
+    const note = (id: number, lat: number, lon: number): Note => ({
+      id,
+      lat,
+      lon,
+      text: `note ${id}`,
+      created_at: '2026-01-01T00:00:00+00:00',
+    });
+    const markerCount = () => pre.textContent!.split(MARKER).length - 1;
+    const facing = (n: Note, a: number) => {
+      const lat = (n.lat * Math.PI) / 180;
+      const lon = (n.lon * Math.PI) / 180 + a;
+      return Math.sin(lat) * Math.sin(TILT) + Math.cos(lat) * Math.cos(lon) * Math.cos(TILT) > 0;
+    };
+    const fire = (type: string, init: PointerEventInit = {}) =>
+      pre.dispatchEvent(new PointerEvent(type, { pointerId: 1, bubbles: true, buttons: 1, ...init }));
+    /** Advance `ms` of fake time in frames, calling `each` after every frame. Collects any rotation requests made. */
+    const run = (ms: number, each: () => void = () => {}) => {
+      for (let t = 0; t < ms; t += STEP) {
+        now += STEP;
+        const pending = frames;
+        frames = [];
+        pending.forEach((cb) => cb(now));
+        requests.push(...(http.match((r) => r.url === ROTATION) as unknown as typeof requests));
+        each();
+      }
+    };
+    /** Natural spin only: the angle the globe is at, if nobody touches it. */
+    const spin = (ms: number, each: () => void = () => {}) =>
+      run(ms, () => {
+        angle += (STEP / 1000) * SPIN;
+        each();
+      });
+
+    const setup = async () => {
+      now = 1000;
+      frames = [];
+      angle = 0;
+      requests = [];
+      configure();
+      fixture = TestBed.createComponent(AsciiGlobe);
+      http = TestBed.inject(HttpTestingController);
+      await fixture.whenStable();
+      pre = fixture.nativeElement.querySelector('pre');
+      pre.getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 180 }) as DOMRect;
+      fixture.nativeElement.querySelector('.stage').getBoundingClientRect = () =>
+        ({ left: 0, top: 0, width: 700, height: 180 }) as DOMRect;
+      requests.push(...(http.match((r) => r.url === ROTATION) as unknown as typeof requests));
+    };
+    const flushLoad = (notes: Note[]) => {
+      requests.shift()!.flush(notes);
+      fixture.detectChanges();
+    };
+
+    beforeEach(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      vi.spyOn(performance, 'now').mockImplementation(() => now);
+      vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb));
+      vi.stubGlobal('cancelAnimationFrame', () => {});
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    });
+
+    slow('makes one request on load and shows its notes at once, even the ones in view', async () => {
+      await setup();
+      expect(requests.length).toBe(1);
+      expect(requests[0].request.params.get('exclude')).toBeNull();
+      flushLoad([note(1, 23.4, 0), note(2, 23.4, 180)]);
+      expect(markerCount()).toBe(1);
+    });
+
+    slow('makes exactly one request per natural date-line crossing, over two full rotations', async () => {
+      await setup();
+      flushLoad([note(1, 0, 10), note(2, 0, 100), note(3, 0, -100)]);
+      let asked = 0;
+      // The date line passes the center at 15s and 45s. Answer each request as it comes.
+      for (let t = 0; t < 60_000; t += STEP) {
+        spin(STEP);
+        while (requests.length) {
+          asked++;
+          expect(requests[0].request.params.get('exclude')).toBe(asked === 1 ? '1,2,3' : '4');
+          requests.shift()!.flush(asked === 1 ? [note(4, 0, 50)] : [note(5, 0, 60)]);
+        }
+      }
+      expect(asked).toBe(2);
+    });
+
+    slow('asks to skip the set that was just shown', async () => {
+      await setup();
+      flushLoad([note(1, 0, 10), note(2, 0, 100)]);
+      spin(15_100);
+      requests.shift()!.flush([note(8, 0, 50), note(9, 0, 60)]);
+      spin(30_000);
+      expect(requests[0].request.params.get('exclude')).toBe('8,9');
+    });
+
+    slow('does not ask when the date line is turned past by hand', async () => {
+      await setup();
+      flushLoad([note(1, 0, 10)]);
+      // 150px is one radian: drag 3.5 radians, slowly, then let go and rest.
+      fire('pointerdown', { clientX: 0 });
+      for (let i = 1; i <= 35; i++) {
+        run(160);
+        fire('pointermove', { clientX: i * 15 });
+      }
+      run(800);
+      fire('pointerup');
+      run(4000);
+      expect(requests.length).toBe(0);
+      // And back again.
+      fire('pointerdown', { clientX: 600 });
+      for (let i = 1; i <= 35; i++) {
+        run(160);
+        fire('pointermove', { clientX: 600 - i * 15 });
+      }
+      fire('pointerup');
+      run(800);
+      expect(requests.length).toBe(0);
+    });
+
+    slow('does not ask while a flick coasts past the date line', async () => {
+      await setup();
+      flushLoad([note(1, 0, 10)]);
+      fire('pointerdown', { clientX: 0 });
+      for (let i = 1; i <= 5; i++) {
+        run(16);
+        fire('pointermove', { clientX: i * 100 });
+      }
+      fire('pointerup');
+      // Coasts for several seconds at far above the natural speed, over many date-line crossings.
+      run(4000);
+      expect(requests.length).toBe(0);
+    });
+
+    slow('does not ask while the tab is hidden', async () => {
+      await setup();
+      flushLoad([note(1, 0, 10)]);
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      spin(20_000);
+      expect(requests.length).toBe(0);
+    });
+
+    slow('does not ask while the globe is off screen', async () => {
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          constructor(private cb: (e: { isIntersecting: boolean }[]) => void) {}
+          observe() {
+            this.cb([{ isIntersecting: false }]);
+          }
+          disconnect() {}
+        },
+      );
+      await setup();
+      flushLoad([note(1, 0, 10)]);
+      spin(20_000);
+      expect(requests.length).toBe(0);
+    });
+
+    slow('does not ask with reduced motion, which has no auto-spin', async () => {
+      vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+      await setup();
+      flushLoad([note(1, 0, 10)]);
+      spin(20_000);
+      expect(requests.length).toBe(0);
+    });
+
+    slow('keeps the current set when a request fails, and tries again only at the next crossing', async () => {
+      await setup();
+      // Both are in view when the date line reaches the center, at 15s and again at 45s.
+      flushLoad([note(1, 0, 180.5), note(2, 0, 170.5)]);
+      expect(markerCount()).toBe(0);
+      spin(15_100);
+      expect(markerCount()).toBe(2);
+      expect(requests.length).toBe(1);
+      requests.shift()!.flush('nope', { status: 500, statusText: 'Server Error' });
+      expect(markerCount()).toBe(2);
+      // No retry before the next crossing.
+      spin(14_000);
+      expect(requests.length).toBe(0);
+      spin(17_000);
+      expect(requests.length).toBe(1);
+      requests.shift()!.flush([note(3, 0, 20.5)]);
+      // The old notes are in view again and have not been taken away; the new one is out of view.
+      expect(markerCount()).toBe(2);
+    });
+
+    slow('makes no second request while one is still waiting', async () => {
+      await setup();
+      flushLoad([note(1, 0, 0)]);
+      spin(15_100);
+      expect(requests.length).toBe(1);
+      // The first never answers; the next crossing (30s on) must not pile another on top.
+      spin(30_000);
+      expect(requests.length).toBe(1);
+    });
+
+    slow('changes the markers only as spots cross the edge, across a swap', async () => {
+      await setup();
+      // Longitudes with a half degree, so no spot sits exactly on the edge at a frame.
+      const first = [note(1, 0, 100.5), note(2, 0, 150.5), note(3, 0, -150.5), note(4, 0, 0.5), note(5, 0, -60.5)];
+      const second = [note(6, 0, -170.5), note(7, 0, 170.5), note(8, 0, 20.5), note(9, 0, 90.5), note(10, 0, -90.5)];
+      flushLoad(first);
+      spin(15_100);
+      requests.shift()!.flush(second);
+      const before = markerCount();
+      spin(0);
+      expect(markerCount()).toBe(before);
+
+      // Every frame for two full turns: the count moves only when some spot of either set
+      // crossed the edge in that frame, and by no more than the spots that crossed.
+      let last = markerCount();
+      let lastAngle = angle;
+      const all = [...first, ...second];
+      spin(60_000, () => {
+        const crossed = all.filter((n) => facing(n, lastAngle) !== facing(n, angle)).length;
+        const count = markerCount();
+        expect(Math.abs(count - last), `angle ${angle} count ${count} last ${last}`).toBeLessThanOrEqual(crossed);
+        last = count;
+        lastAngle = angle;
+      });
+      // A full turn on, only the second set remains, and every one of its spots in view is marked.
+      expect(markerCount()).toBe(second.filter((n) => facing(n, angle)).length);
+    });
+
+    slow('shows a new note in view only after its spot has gone out of view and come back', async () => {
+      await setup();
+      flushLoad([note(1, 0, 0)]);
+      spin(15_100);
+      // Angle is now just past pi, so the center of the view is lon 180: a note there is in view.
+      requests.shift()!.flush([note(2, 0, 180)]);
+      expect(markerCount()).toBe(0);
+      let shownWhileFacingAfterArrival = false;
+      let hidden = false;
+      spin(30_000, () => {
+        const isFacing = facing(note(2, 0, 180), angle);
+        if (!isFacing) hidden = true;
+        if (!hidden && markerCount() > 0) shownWhileFacingAfterArrival = true;
+      });
+      expect(shownWhileFacingAfterArrival).toBe(false);
+      expect(hidden).toBe(true);
+    });
+
+    slow('never has more than 5 notes from the server, even if it sends more', async () => {
+      await setup();
+      flushLoad(Array.from({ length: 9 }, (_, i) => note(i + 1, 0, i * 5 - 20)));
+      expect(markerCount()).toBe(5);
     });
   });
 });

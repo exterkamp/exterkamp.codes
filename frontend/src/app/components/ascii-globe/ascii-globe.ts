@@ -10,10 +10,12 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { cellRgb, css, inkColor, MARKER_CELL, NO_CELL, SPACE_COLOR, STAR_COLOR, TINT_STEPS, tintColor, tintStep } from './globe-palette';
 import { createGlobe, markerCell, project, Spot, unproject } from './globe-renderer';
 import { assignSlots, cellCenter, advancePanels, layoutLanes, LANES, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, placementRank, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
+import { COAST_EPSILON, DateLineWatcher, MIN_REQUEST_GAP_MS, NoteRotation } from './note-rotation';
 import { createSpace, rampChar, Space } from './space';
 
 const COLS = 61;
@@ -71,9 +73,17 @@ export class AsciiGlobe {
   private readonly notesService = inject(NotesService);
   private readonly injector = inject(Injector);
   private readonly changeDetector = inject(ChangeDetectorRef);
+  private readonly destroyRef = inject(DestroyRef);
 
   protected readonly maxLength = MAX_NOTE_LENGTH;
-  private notes: Note[] = [];
+  /** The notes on the globe: this rotation's set from the server, plus the visitor's own. */
+  private readonly rotation = new NoteRotation();
+  /** Whether a note's spot is on the visible side at the globe's current angle. */
+  private facing = (_note: Note) => false;
+  private readonly dateLine = new DateLineWatcher();
+  private requestPending = false;
+  private lastRequest = -Infinity;
+  private loaded = false;
   private redraw = () => {};
   private nextTempId = -1;
   /** Where each shown panel is now (eased toward its target), and which spot it took, by note id. */
@@ -104,11 +114,16 @@ export class AsciiGlobe {
 
     // Show it right away; the server's copy replaces it once saved.
     const temp: Note = { id: this.nextTempId--, ...spot, text, created_at: new Date().toISOString() };
-    this.setNotes([...this.notes, temp]);
+    this.rotation.addOwn(temp);
+    this.redraw();
     this.notesService.add({ ...spot, text }).subscribe({
-      next: (saved) => this.setNotes(this.notes.map((n) => (n.id === temp.id ? saved : n))),
+      next: (saved) => {
+        this.rotation.replace(temp.id, saved);
+        this.redraw();
+      },
       error: (err: HttpErrorResponse) => {
-        this.setNotes(this.notes.filter((n) => n.id !== temp.id));
+        this.rotation.remove(temp.id);
+        this.redraw();
         this.error.set(
           err.status === 429 ? 'Too many notes, try again in a bit.' : "Couldn't save that note, sorry.",
         );
@@ -128,7 +143,7 @@ export class AsciiGlobe {
   /** Picks the notes for the panels, then sets each panel beside its marker with a line between them. */
   private updatePanels(angle: number) {
     const now = performance.now();
-    const candidates = this.notes.filter((n) => (this.blockedUntil.get(n.id) ?? 0) <= now);
+    const candidates = this.rotation.current().filter((n) => (this.blockedUntil.get(n.id) ?? 0) <= now);
     this.setSlots(assignSlots(this.activeSlots, nearestInZone(candidates, angle, TILT, this.activeSlots)));
     const slots = this.activeSlots;
 
@@ -242,18 +257,35 @@ export class AsciiGlobe {
     el.replaceChildren(fragment);
   }
 
-  private setNotes(notes: Note[]) {
-    this.notes = notes;
-    this.redraw();
+  /**
+   * Asks for the next set of notes. A slow or failed request changes nothing and is not retried:
+   * the next date-line crossing asks again.
+   */
+  private requestSet() {
+    const now = performance.now();
+    if (this.requestPending || now - this.lastRequest < MIN_REQUEST_GAP_MS) return;
+    this.requestPending = true;
+    this.lastRequest = now;
+    this.notesService
+      .rotation(this.rotation.currentIds())
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (notes) => {
+          this.requestPending = false;
+          this.rotation.setServerNotes(notes, this.facing, !this.loaded);
+          this.loaded = true;
+          this.redraw();
+        },
+        // The globe works fine without notes.
+        error: () => {
+          this.requestPending = false;
+        },
+      });
   }
 
   constructor() {
-    const destroyRef = inject(DestroyRef);
-    this.notesService.list().subscribe({
-      next: (notes) => this.setNotes([...notes, ...this.notes.filter((n) => n.id < 0)]),
-      // The globe works fine without notes.
-      error: () => {},
-    });
+    const destroyRef = this.destroyRef;
+    this.requestSet();
 
     afterNextRender(() => {
       const el = this.pre().nativeElement;
@@ -267,7 +299,9 @@ export class AsciiGlobe {
       const shownCodes = new Uint8Array(COLS * ROWS).fill(NO_CELL);
       const colorOf = new Map<number, string>();
       const draw = () => {
-        const frame = render(angle, this.notes);
+        // A note appears or goes only as its spot crosses the globe's edge.
+        this.rotation.update(this.facing);
+        const frame = render(angle, this.rotation.markers());
         for (let i = 0; i < cells.length; i++) {
           const char = frame.chars[i + Math.floor(i / COLS)];
           const code = frame.colors[i];
@@ -294,6 +328,7 @@ export class AsciiGlobe {
       this.redraw = draw;
 
       let angle = 0;
+      this.facing = (note) => project(note, angle, TILT).z > 0;
       let dragging = false;
       let dragPointer: number | undefined;
       let dragX = 0;
@@ -404,6 +439,9 @@ export class AsciiGlobe {
         if (!dragging) {
           velocity = SPIN_SPEED + (velocity - SPIN_SPEED) * Math.exp(-dt / MOMENTUM_DECAY);
           angle += dt * velocity;
+          // Only the globe's own spin, not a drag or a flick's coast, counts toward a new set.
+          const natural = Math.abs(velocity - SPIN_SPEED) < COAST_EPSILON;
+          if (natural && !document.hidden && this.dateLine.advance(dt * SPIN_SPEED)) this.requestSet();
           draw();
         }
         frame = requestAnimationFrame(tick);

@@ -23,8 +23,10 @@ export interface NewNote {
 export class NotesService {
   private readonly http = inject(HttpClient);
 
-  list(): Observable<Note[]> {
-    return this.http.get<Note[]>('/api/notes');
+  /** A small random set of notes for one turn of the globe, skipping the ids in `exclude` when it can. */
+  rotation(exclude: number[]): Observable<Note[]> {
+    const params: Record<string, string> = exclude.length ? { exclude: exclude.join(',') } : {};
+    return this.http.get<Note[]>('/api/notes/rotation', { params });
   }
 
   add(note: NewNote): Observable<Note> {
