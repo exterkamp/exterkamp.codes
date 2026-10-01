@@ -3,12 +3,23 @@ import {
   assignSlots,
   cellCenter,
   DISC_OVERLAP,
+  advancePanels,
+  easeRect,
+  PanelState,
+  layoutPanels,
   nearestEdgePoint,
   nearestInZone,
+  PANEL_GAP,
+  PANEL_MAX_SPEED,
+  PANEL_TAU,
+  pinPoint,
   placePanels,
+  Rect,
+  Slots,
   ZONE_DEGREES,
   ZONE_HIDE_DEGREES,
 } from './note-panels';
+import { project } from './globe-renderer';
 import { Note } from './notes.service';
 
 const TILT = 0;
@@ -205,5 +216,195 @@ describe('cellCenter', () => {
     const box = { left: 10, top: 20, width: 610, height: 370 };
     expect(cellCenter({ col: 0, row: 0 }, 61, 37, box)).toEqual({ x: 15, y: 25 });
     expect(cellCenter({ col: 30, row: 18 }, 61, 37, box)).toEqual({ x: 315, y: 205 });
+  });
+});
+
+describe('panel constants', () => {
+  it('keeps panels about 28px from their pins and barely over the globe', () => {
+    expect(PANEL_GAP).toBe(28);
+    expect(DISC_OVERLAP).toBe(4);
+  });
+});
+
+describe('easeRect', () => {
+  const at = (left: number, top: number): Rect => ({ left, top, width: 10, height: 10 });
+  const run = (from: Rect, to: Rect, seconds: number, fps: number) => {
+    let r = from;
+    for (let i = 0; i < seconds * fps; i++) r = easeRect(r, to, 1 / fps);
+    return r;
+  };
+
+  it('starts at the target, and moves part of the way toward it', () => {
+    expect(easeRect(undefined, at(50, 60), 0.016)).toEqual(at(50, 60));
+    const r = easeRect(at(0, 0), at(10, 10), PANEL_TAU);
+    expect(r.left).toBeCloseTo(10 * (1 - Math.exp(-1)), 0);
+    expect(r.top).toBeCloseTo(r.left);
+  });
+
+  it('looks the same at any frame rate', () => {
+    expect(run(at(0, 0), at(30, 0), 0.2, 120).left).toBeCloseTo(run(at(0, 0), at(30, 0), 0.2, 30).left, 0);
+  });
+
+  it('catches up with a pin that has fallen behind within about 300ms', () => {
+    expect(30 - run(at(0, 0), at(30, 0), 0.3, 60).left).toBeLessThan(2.5);
+  });
+
+  it('keeps up with a target moving steadily far faster than PANEL_MAX_SPEED', () => {
+    const fps = 60;
+    const speed = 400;
+    let r = at(0, 0);
+    let target = at(0, 0);
+    let worst = 0;
+    for (let i = 0; i < fps * 3; i++) {
+      const next = at(target.left + speed / fps, 0);
+      r = easeRect(r, next, 1 / fps, PANEL_TAU, Math.hypot(next.left - target.left, 0));
+      target = next;
+      if (i > fps) worst = Math.max(worst, target.left - r.left);
+    }
+    // Easing alone trails a steady target by speed * tau; the allowance must not add to that.
+    expect(worst).toBeLessThan(speed * PANEL_TAU * 1.1);
+    // Without the allowance the cap would leave it hundreds of pixels behind.
+    let slow = at(0, 0);
+    for (let i = 0; i < fps * 3; i++) slow = easeRect(slow, at((i + 1) * (speed / fps), 0), 1 / fps);
+    expect(3 * speed - slow.left).toBeGreaterThan(300);
+  });
+
+  it('never moves faster than PANEL_MAX_SPEED, however far it has to go', () => {
+    const r = easeRect(at(0, 0), at(500, 500), 1 / 60);
+    expect(Math.hypot(r.left, r.top)).toBeLessThanOrEqual(PANEL_MAX_SPEED / 60 + 1e-9);
+    expect(PANEL_MAX_SPEED / 60).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('advancePanels', () => {
+  const rect = (left: number, top: number): Rect => ({ left, top, width: 10, height: 10 });
+  const prev = new Map<number, PanelState>([[1, { rect: rect(0, 0), target: rect(0, 0), key: 'a' }]]);
+
+  it('sits on the target with snap, and glides without it', () => {
+    expect(advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'a' }], 0.016, true).get(1)!.rect.left).toBe(100);
+    expect(advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'b' }], 0.016).get(1)!.rect.left).toBeLessThan(5);
+  });
+
+  it('lets a panel follow its target, but not jump when its spot changes', () => {
+    const follow = advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'a' }], 0.016).get(1)!.rect.left;
+    const jump = advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'b' }], 0.016).get(1)!.rect.left;
+    expect(follow).toBeGreaterThan(jump);
+  });
+
+  it('only keeps the panels it is given, and starts new ones on their targets', () => {
+    const next = advancePanels(prev, [2], [{ rect: rect(7, 8), key: 'a' }], 0.016);
+    expect([...next.keys()]).toEqual([2]);
+    expect(next.get(2)!.rect).toEqual(rect(7, 8));
+  });
+});
+
+describe('pinPoint', () => {
+  it('is continuous, unlike the character cell center', () => {
+    const box = { left: 10, top: 20, width: 610, height: 370 };
+    expect(pinPoint({ x: 0, y: 0 }, box)).toEqual({ x: 315, y: 205 });
+    expect(pinPoint({ x: 0.001, y: -0.001 }, box).y).toBeGreaterThan(205);
+  });
+});
+
+// The demo notes from backend/app/demo_notes.py.
+const DEMO: [number, number][] = [
+  [64.84, -147.72], [37.77, -122.42], [40.71, -74.01], [19.43, -99.13], [-12.05, -77.04], [-34.6, -58.38],
+  [-54.8, -68.3], [64.15, -21.94], [51.51, -0.13], [51.5, -0.1], [48.86, 2.35], [41.9, 12.5], [30.04, 31.24],
+  [6.52, 3.38], [-1.29, 36.82], [-33.92, 18.42], [55.75, 37.62], [28.61, 77.21], [35.68, 139.69], [35.66, 139.7],
+  [1.35, 103.82], [-33.87, 151.21], [-41.29, 174.78], [-17.71, 178.07], [-16.5, -179.5], [65.6, 179.9],
+  [64.4, -179.9], [-77.85, 166.67], [-90, 0], [-67.6, 62.87],
+];
+
+/** Runs the panel pipeline (as the component does) over one full turn of the globe, frame by frame. */
+function simulate(box: { left: number; top: number; width: number; height: number }, stage: { width: number; height: number }, fps = 60) {
+  const notes = DEMO.map(([lat, lon], i) => note(i + 1, lon, lat));
+  const tilt = (23.4 * Math.PI) / 180;
+  const size = { width: 150, height: 56 };
+  const disc = { x: box.left + box.width / 2, y: box.top + box.height / 2, r: Math.min(box.width, box.height) / 2 };
+  let slots: Slots = [null, null, null];
+  let state = new Map<number, PanelState>();
+  const frames: { id: number; rect: Rect; target: Rect; pin: { x: number; y: number }; first: boolean }[][] = [];
+  for (let f = 0; f < fps * 30; f++) {
+    const angle = (f / (fps * 30)) * 2 * Math.PI;
+    slots = assignSlots(slots, nearestInZone(notes, angle, tilt, slots));
+    // Panels already showing are placed first, as the component does.
+    const shown = slots.filter((n): n is Note => !!n).sort((a, b) => Number(state.has(b.id)) - Number(state.has(a.id)));
+    const pins = shown.map((n) => pinPoint(project(n, angle, tilt), box));
+    const targets = layoutPanels(pins, shown.map(() => size), stage, PANEL_GAP, disc, shown.map((n) => state.get(n.id)?.key));
+    const next = advancePanels(state, shown.map((n) => n.id), targets, 1 / fps);
+    frames.push(
+      shown.map((n, i) => ({ id: n.id, rect: next.get(n.id)!.rect, target: targets[i].rect, pin: pins[i], first: !state.has(n.id) })),
+    );
+    state = next;
+  }
+  return { frames, disc };
+}
+
+describe('panels over a full rotation of the demo notes', () => {
+  const box = { left: 167, top: 20, width: 366, height: 370 };
+  const stage = { width: 700, height: 410 };
+
+  it('never move more than a few pixels between frames, apart from first appearing', () => {
+    const { frames } = simulate(box, stage);
+    const last = new Map<number, Rect>();
+    let worst = 0;
+    let moves = 0;
+    for (const frame of frames) {
+      const seen = new Map<number, Rect>();
+      for (const { id, rect, first } of frame) {
+        const before = last.get(id);
+        if (before && !first) {
+          worst = Math.max(worst, Math.abs(rect.top - before.top));
+          moves++;
+        }
+        seen.set(id, rect);
+      }
+      last.clear();
+      seen.forEach((r, id) => last.set(id, r));
+    }
+    expect(moves).toBeGreaterThan(100);
+    expect(worst).toBeLessThanOrEqual(3);
+  });
+
+  const apart = (r: Rect, o: Rect) =>
+    r.left + r.width <= o.left || o.left + o.width <= r.left || r.top + r.height <= o.top || o.top + o.height <= r.top;
+  const reach = (r: Rect, d: { x: number; y: number; r: number }) =>
+    d.r - Math.hypot(Math.max(r.left, Math.min(d.x, r.left + r.width)) - d.x, Math.max(r.top, Math.min(d.y, r.top + r.height)) - d.y);
+
+  it('aim at spots that keep clear of each other and their pins, and barely touch the globe', () => {
+    const { frames, disc } = simulate(box, stage);
+    for (const frame of frames) {
+      frame.forEach(({ target: t, pin }, i) => {
+        expect(pin.x >= t.left && pin.x <= t.left + t.width && pin.y >= t.top && pin.y <= t.top + t.height).toBe(false);
+        expect(t.left).toBeGreaterThanOrEqual(0);
+        expect(t.left + t.width).toBeLessThanOrEqual(stage.width);
+        expect(reach(t, disc)).toBeLessThanOrEqual(DISC_OVERLAP + 0.5);
+        for (const { target: o } of frame.slice(i + 1)) expect(apart(t, o)).toBe(true);
+      });
+    }
+  });
+
+  it('only cross paths while gliding to a new spot', () => {
+    const { frames } = simulate(box, stage);
+    const crossing = frames.filter((f) => f.some(({ rect: r }, i) => f.slice(i + 1).some(({ rect: o }) => !apart(r, o))));
+    // Seconds-long glides only happen when a crowd of three pins forces a panel to the far side of the globe.
+    expect(crossing.length / frames.length).toBeLessThan(0.13);
+  });
+
+  it('rarely pass over their own pins while gliding', () => {
+    const { frames } = simulate(box, stage);
+    const covering = frames.filter((f) =>
+      f.some(({ rect: r, pin }) => pin.x >= r.left && pin.x <= r.left + r.width && pin.y >= r.top && pin.y <= r.top + r.height),
+    );
+    // Only when a crowd of three pins forces a panel to the far side of the globe, which takes seconds at the speed limit.
+    expect(covering.length / frames.length).toBeLessThan(0.04);
+    // And never for long at a time: no single episode of covering lasts more than a second (the longest measured is 0.67s).
+    let run = 0;
+    let longest = 0;
+    for (const f of frames) {
+      run = f.some(({ rect: r, pin }) => pin.x >= r.left && pin.x <= r.left + r.width && pin.y >= r.top && pin.y <= r.top + r.height) ? run + 1 : 0;
+      longest = Math.max(longest, run);
+    }
+    expect(longest).toBeLessThanOrEqual(60);
   });
 });
