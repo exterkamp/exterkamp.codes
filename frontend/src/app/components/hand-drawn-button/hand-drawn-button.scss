@@ -1,0 +1,44 @@
+// The placeholder programmatic sketch didn't look good, so this is on a
+// plain border for now. The border-image 9-slice scaffolding (for a real
+// scanned/vectorized hand-drawn outline) is preserved below, commented out -
+// see the explanation there for how it works and what to do with a real
+// asset. hand-drawn-outline.svg is still in this folder, just unused.
+.hand-drawn-button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  background: transparent;
+  padding: 0.6em 1.4em;
+
+  border: 2px solid currentcolor;
+  border-radius: 4px;
+
+  // border-image-slice cuts hand-drawn-outline.svg into 9 regions (4
+  // corners, 4 edges, 1 center) at the given offsets *into the source SVG's
+  // own viewBox*, not the rendered button size. The 4 corners are placed at
+  // the button's corners unscaled; the 4 edges stretch/repeat to fill
+  // whatever length the button ends up being. That's what lets one fixed
+  // drawing work at any button width or height without warping the corners -
+  // only the straight edge segments between them stretch.
+  //
+  // PLACEHOLDER ARTWORK: hand-drawn-outline.svg here is a rough programmatic
+  // sketch, not a real scanned drawing. To swap in a real one:
+  //   1. Draw it, scan/photograph it, clean up contrast so the line is solid
+  //      black on a transparent or white background.
+  //   2. Vectorize to SVG (Inkscape's "Trace Bitmap", or Illustrator Image
+  //      Trace) - this is what makes it scale without pixelating.
+  //   3. Replace hand-drawn-outline.svg, keeping the stroke inset far enough
+  //      from the edge that the slice offsets below still land inside the
+  //      drawn line rather than outside it. Match the SVG's width/height
+  //      attributes to its viewBox so the slice numbers mean what you expect.
+  //   4. Re-tune border-image-slice and border-width to the new artwork's
+  //      stroke thickness and corner size - the values below are specific to
+  //      this placeholder's proportions (120x120 viewBox, ~28-unit corners).
+  //
+  // border-style: solid;
+  // border-width: 14px;
+  // border-image-source: url('./hand-drawn-outline.svg');
+  // border-image-slice: 28 fill;
+  // border-image-width: 14px;
+  // border-image-repeat: round;
+}
