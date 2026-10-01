@@ -9,8 +9,8 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { createGlobe, markerCell, Spot, unproject } from './globe-renderer';
-import { assignSlots, cellCenter, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, placePanels, sameSlots, Slots } from './note-panels';
+import { createGlobe, markerCell, project, Spot, unproject } from './globe-renderer';
+import { assignSlots, cellCenter, easeRect, layoutPanels, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, Rect, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 
 const COLS = 61;
@@ -47,6 +47,9 @@ export class AsciiGlobe {
   private notes: Note[] = [];
   private redraw = () => {};
   private nextTempId = -1;
+  /** Where each shown panel is now (eased toward its target), and which spot it took, by note id. */
+  private panelPositions = new Map<number, { rect: Rect; key: string }>();
+  private lastPanelTime = 0;
 
   /** Where the visitor clicked, while the note form is open. */
   protected readonly pending = signal<Spot | null>(null);
@@ -102,19 +105,36 @@ export class AsciiGlobe {
     };
     const panels = stage.querySelectorAll<HTMLElement>('.panel');
     const links = stage.querySelectorAll<SVGGElement>('.link');
-    // Active panels first, so a fading one never pushes a live one aside. Panels fading out
-    // keep following their dot until they are gone.
+    // Active panels first, so a fading one never pushes a live one aside, and panels already
+    // showing before newcomers, so a newcomer fits around them instead of shoving them. Panels
+    // fading out keep following their dot until they are gone.
     const items = this.shown()
-      .map((note, i) => ({ i, active: !!slots[i], end: note && markerCell(note, angle, TILT, COLS, ROWS) }))
-      .flatMap((item) => (item.end ? [{ ...item, end: cellCenter(item.end, COLS, ROWS, box) }] : []))
-      .sort((a, b) => Number(b.active) - Number(a.active));
-    const rects = placePanels(
-      items.map((item) => item.end),
+      .map((note, i) => ({ i, note, active: !!slots[i], end: note && markerCell(note, angle, TILT, COLS, ROWS) }))
+      .flatMap((item) => (item.end && item.note ? [{ ...item, id: item.note.id, end: cellCenter(item.end, COLS, ROWS, box) }] : []))
+      .sort((a, b) => Number(b.active) - Number(a.active) || Number(this.panelPositions.has(b.id)) - Number(this.panelPositions.has(a.id)));
+    // Panels are placed by where the dot truly is, not the character cell it is drawn in, whose
+    // position steps a whole row at a time. Only the line ends on the drawn cell.
+    const pins = items.map((item) => pinPoint(project(item.note!, angle, TILT), box));
+    const targets = layoutPanels(
+      pins,
       items.map((item) => ({ width: panels[item.i].offsetWidth, height: panels[item.i].offsetHeight })),
       { width: stageRect.width, height: stageRect.height },
       PANEL_GAP,
       { x: box.left + box.width / 2, y: box.top + box.height / 2, r: Math.min(box.width, box.height) / 2 },
+      items.map((item) => this.panelPositions.get(item.id)?.key),
     );
+    const now = performance.now();
+    const dt = Math.min(now - this.lastPanelTime, 100) / 1000;
+    this.lastPanelTime = now;
+    // With reduced motion, panels stay exactly on their targets instead of easing.
+    const snap = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const positions = new Map<number, { rect: Rect; key: string }>();
+    const rects = items.map((item, n) => {
+      const rect = easeRect(snap ? undefined : this.panelPositions.get(item.id)?.rect, targets[n].rect, dt);
+      positions.set(item.id, { rect, key: targets[n].key });
+      return rect;
+    });
+    this.panelPositions = positions;
     items.forEach(({ i, end }, n) => {
       const rect = rects[n];
       const start = nearestEdgePoint(rect, end);

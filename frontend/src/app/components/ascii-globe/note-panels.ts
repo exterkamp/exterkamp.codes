@@ -11,7 +11,15 @@ export const ZONE_DEGREES = 60;
 /** Once shown, a panel stays until its note is this far from the center, so it doesn't flicker at the edge. */
 export const ZONE_HIDE_DEGREES = 65;
 /** Gap in pixels between a marker and its panel. */
-export const PANEL_GAP = 14;
+export const PANEL_GAP = 28;
+/** Seconds for a panel to close all but a factor of 1/e of the distance to its target spot. */
+export const PANEL_TAU = 0.1;
+/** Fastest a panel may move (pixels per second), so a change of spot is a glide, never a jump. A pin itself moves far slower. */
+export const PANEL_MAX_SPEED = 150;
+/** Cost per pixel of the line from a panel to its pin. */
+const LINE_WEIGHT = 0.3;
+/** Cost bonus for staying on the spot (side and stack slot) a panel had last frame, so near-ties don't flip it. */
+export const STICKY_BONUS = 40;
 
 // On the unit sphere, z is the cosine of the angle from the point facing the viewer.
 const withinDegrees = (z: number, degrees: number) => z >= Math.cos((degrees * Math.PI) / 180) - 1e-9;
@@ -66,7 +74,7 @@ export interface Disc {
 }
 
 /** How far into the globe's disc a panel may reach, in pixels. */
-export const DISC_OVERLAP = 10;
+export const DISC_OVERLAP = 4;
 
 /** How far a rectangle reaches into a disc (0 when it is clear of it). */
 const intrusion = (rect: Rect, disc: Disc) => {
@@ -116,32 +124,51 @@ export function placePanels(
   gap = PANEL_GAP,
   disc?: Disc,
 ): Rect[] {
+  return layoutPanels(markers, sizes, bounds, gap, disc).map((p) => p.rect);
+}
+
+/**
+ * Like `placePanels`, but also says which candidate spot each panel took. Passing those keys back
+ * as `sticky` on the next frame makes a panel keep its spot unless another is clearly cheaper.
+ */
+export function layoutPanels(
+  markers: readonly { x: number; y: number }[],
+  sizes: readonly { width: number; height: number }[],
+  bounds: { width: number; height: number },
+  gap = PANEL_GAP,
+  disc?: Disc,
+  sticky: readonly (string | undefined)[] = [],
+): { rect: Rect; key: string }[] {
   const placed: Rect[] = [];
+  const keys: string[] = [];
   const lines: { from: { x: number; y: number }; to: { x: number; y: number } }[] = [];
   markers.forEach((m, i) => {
     const { width: w, height: h } = sizes[i];
     // Beside the marker first, then the same sides shifted up and down by whole panel heights,
     // so a crowd of panels can stack instead of overlapping.
-    const shifts = [0, -1, 1, -2, 2, -3, 3].map((k) => k * (h + 4));
+    const steps = [0, -1, 1, -2, 2, -3, 3];
+    const shifts = steps.map((k) => k * (h + 4));
     const sides = [m.x + gap, m.x - gap - w];
     const candidates = [
-      ...shifts.flatMap((dy) => sides.map((left) => ({ left, top: m.y - h / 2 + dy, dy }))),
-      { left: m.x - w / 2, top: m.y - gap - h, dy: 0 },
-      { left: m.x - w / 2, top: m.y + gap, dy: 0 },
+      ...steps.flatMap((k, s) => sides.map((left, side) => ({ left, top: m.y - h / 2 + shifts[s], dy: shifts[s], key: `side${side}:${k}` }))),
+      { left: m.x - w / 2, top: m.y - gap - h, dy: 0, key: 'above' },
+      { left: m.x - w / 2, top: m.y + gap, dy: 0, key: 'below' },
     ];
     if (disc) {
       // Just outside the globe, on the side the marker is on, level with the marker or stacked above/below.
-      const sign = m.x >= disc.x ? 1 : -1;
-      for (const dy of shifts) {
+      // Either side of the globe is a candidate, so a panel can stay where it is as its marker crosses the middle.
+      for (const sign of [1, -1]) steps.forEach((k, s) => {
+        const dy = shifts[s];
         const top = m.y - h / 2 + dy;
         // The rectangle's corner nearest the globe's center sits on this row; find the globe's edge there.
         const row = Math.max(top, Math.min(disc.y, top + h));
         const half = Math.sqrt(Math.max(0, disc.r * disc.r - (row - disc.y) ** 2));
         const edge = disc.x + sign * (half - DISC_OVERLAP / 2);
-        candidates.push({ left: sign > 0 ? edge : edge - w, top, dy });
-      }
+        candidates.push({ left: sign > 0 ? edge : edge - w, top, dy, key: `disc${sign}:${k}` });
+      });
     }
     let best: Rect | null = null;
+    let bestKey = '';
     let bestCost = Infinity;
     for (const c of candidates) {
       // Clamp into bounds (the panel is pinned to the left/top edge if it is bigger than the bounds).
@@ -168,15 +195,42 @@ export function placePanels(
       if (disc) cost += Math.max(0, intrusion(rect, disc) - DISC_OVERLAP) * 50 + intrusion(rect, disc) * 2;
       // Displacement from the ideal spot, and a preference for staying level with the marker.
       cost += Math.hypot(rect.left - c.left, rect.top - c.top) + Math.abs(c.dy) * 0.5;
+      // A long line is worse than a short one, so a panel moves to the nearer side only once it is clearly nearer.
+      cost += Math.hypot(line.from.x - m.x, line.from.y - m.y) * LINE_WEIGHT;
+      if (c.key === sticky[i]) cost -= STICKY_BONUS;
       if (cost < bestCost) {
         best = rect;
+        bestKey = c.key;
         bestCost = cost;
       }
     }
     placed.push(best!);
+    keys.push(bestKey);
     lines.push({ from: nearestEdgePoint(best!, m), to: m });
   });
-  return placed;
+  return placed.map((rect, i) => ({ rect, key: keys[i] }));
+}
+
+/**
+ * Moves a panel from where it was toward `target`, closing 1 - e^(-dt/tau) of the distance, so
+ * the motion looks the same at any frame rate, but never faster than `PANEL_MAX_SPEED`. With no
+ * previous position it starts at the target.
+ */
+export function easeRect(previous: Rect | undefined, target: Rect, dt: number, tau = PANEL_TAU): Rect {
+  if (!previous) return target;
+  const k = 1 - Math.exp(-Math.max(0, dt) / tau);
+  const dx = (target.left - previous.left) * k;
+  const dy = (target.top - previous.top) * k;
+  const cap = Math.min(1, (PANEL_MAX_SPEED * Math.max(0, dt)) / (Math.hypot(dx, dy) || 1));
+  return { ...target, left: previous.left + dx * cap, top: previous.top + dy * cap };
+}
+
+/** Where a spot at view-space (x right, y up) is, in the same pixels as `cellCenter`, but not snapped to a character cell. */
+export function pinPoint(
+  p: { x: number; y: number },
+  box: { left: number; top: number; width: number; height: number },
+): { x: number; y: number } {
+  return { x: box.left + ((p.x + 1) / 2) * box.width, y: box.top + ((1 - p.y) / 2) * box.height };
 }
 
 /** The point on a panel's outline nearest a marker, where its line starts. */
