@@ -9,7 +9,8 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { createGlobe, project, Spot, unproject } from './globe-renderer';
+import { createGlobe, markerCell, Spot, unproject } from './globe-renderer';
+import { assignSlots, cellCenter, nearestVisible, PANEL_COUNT, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 
 const COLS = 61;
@@ -37,6 +38,7 @@ const CLICK_MAX_MS = 500;
 })
 export class AsciiGlobe {
   private readonly pre = viewChild.required<ElementRef<HTMLPreElement>>('globe');
+  private readonly stage = viewChild.required<ElementRef<HTMLElement>>('stage');
   private readonly noteInput = viewChild<ElementRef<HTMLInputElement>>('noteInput');
   private readonly notesService = inject(NotesService);
   private readonly injector = inject(Injector);
@@ -48,8 +50,11 @@ export class AsciiGlobe {
 
   /** Where the visitor clicked, while the note form is open. */
   protected readonly pending = signal<Spot | null>(null);
-  /** The note nearest the front-center of the globe, shown as readable text. */
-  protected readonly featured = signal<Note | null>(null);
+  private activeSlots: Slots = Array(PANEL_COUNT).fill(null);
+  /** The note in each panel slot, or null when the slot is empty (and fading out). */
+  protected readonly slots = signal<Slots>(this.activeSlots);
+  /** The last note each slot held, so a panel keeps its text while it fades out. */
+  protected readonly shown = signal<Slots>(this.activeSlots);
   protected readonly error = signal('');
 
   protected cancel() {
@@ -77,6 +82,41 @@ export class AsciiGlobe {
     });
   }
 
+  /** Picks the notes for the panels and points each panel's line at its marker. */
+  private updatePanels(angle: number) {
+    const slots = assignSlots(this.activeSlots, nearestVisible(this.notes, angle, TILT), angle, TILT);
+    if (!sameSlots(slots, this.activeSlots)) {
+      this.activeSlots = slots;
+      this.slots.set(slots);
+      this.shown.update((shown) => shown.map((n, i) => slots[i] ?? n));
+    }
+
+    const stage = this.stage().nativeElement;
+    const stageRect = stage.getBoundingClientRect();
+    const globeRect = this.pre().nativeElement.getBoundingClientRect();
+    const box = {
+      left: globeRect.left - stageRect.left,
+      top: globeRect.top - stageRect.top,
+      width: globeRect.width,
+      height: globeRect.height,
+    };
+    const panels = stage.querySelectorAll<HTMLElement>('.panel');
+    const links = stage.querySelectorAll<SVGGElement>('.link');
+    slots.forEach((note, i) => {
+      const cell = note && markerCell(note, angle, TILT, COLS, ROWS);
+      if (!cell) return;
+      const end = cellCenter(cell, COLS, ROWS, box);
+      const panel = panels[i].getBoundingClientRect();
+      const [line, dot] = [links[i].firstElementChild!, links[i].lastElementChild!];
+      line.setAttribute('x1', String(panel.left - stageRect.left + panel.width / 2));
+      line.setAttribute('y1', String(panel.bottom - stageRect.top));
+      line.setAttribute('x2', String(end.x));
+      line.setAttribute('y2', String(end.y));
+      dot.setAttribute('cx', String(end.x));
+      dot.setAttribute('cy', String(end.y));
+    });
+  }
+
   private setNotes(notes: Note[]) {
     this.notes = notes;
     this.redraw();
@@ -95,7 +135,7 @@ export class AsciiGlobe {
       const render = createGlobe({ cols: COLS, rows: ROWS, tilt: TILT, light: LIGHT });
       const draw = () => {
         el.textContent = render(angle, this.notes);
-        this.featured.set(nearestCenter(this.notes, angle));
+        this.updatePanels(angle);
       };
       this.redraw = draw;
 
@@ -252,20 +292,4 @@ export class AsciiGlobe {
       });
     });
   }
-}
-
-/** Of the notes on the visible side of the globe, the one closest to its front-center. */
-function nearestCenter(notes: readonly Note[], angle: number): Note | null {
-  let best: Note | null = null;
-  let bestDistance = Infinity;
-  for (const note of notes) {
-    const p = project(note, angle, TILT);
-    if (p.z <= 0) continue;
-    const distance = p.x * p.x + p.y * p.y;
-    if (distance < bestDistance) {
-      best = note;
-      bestDistance = distance;
-    }
-  }
-  return best;
 }
