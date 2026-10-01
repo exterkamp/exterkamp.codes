@@ -49,6 +49,9 @@ describe('AsciiGlobe', () => {
     redrawGlobe(fixture);
     expect(space.innerHTML).toBe(before);
     expect(buildSpace().glyphs).toEqual(buildSpace().glyphs);
+    expect(Array.from(buildSpace().levels)).toEqual(Array.from(buildSpace().levels));
+    expect(SPACE_COLS).toBe(61 + 2 * 16);
+    expect(SPACE_ROWS).toBe(37 + 12 + 2);
   });
 
   describe('dragging', () => {
