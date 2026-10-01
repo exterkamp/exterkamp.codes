@@ -101,3 +101,49 @@ def test_ip_addresses_are_not_stored(client, tmp_path):
     with sqlite3.connect(tmp_path / "notes.db") as conn:
         dump = repr(conn.execute("SELECT * FROM notes").fetchall())
     assert "203.0.113.9" not in dump
+
+
+# --- demo seeding ---
+
+
+def seeded_notes(monkeypatch, tmp_path, flag="1"):
+    monkeypatch.setenv("NOTES_DB", str(tmp_path / "notes.db"))
+    if flag is None:
+        monkeypatch.delenv("SEED_DEMO_NOTES", raising=False)
+    else:
+        monkeypatch.setenv("SEED_DEMO_NOTES", flag)
+    with TestClient(main.app) as c:  # entering the context runs startup
+        return c.get("/api/notes").json()
+
+
+def test_seeds_when_empty_and_flagged(tmp_path, monkeypatch):
+    notes = seeded_notes(monkeypatch, tmp_path)
+    assert 28 <= len(notes) <= 32
+    assert any(n["lat"] < -60 for n in notes)  # Antarctica
+    assert any(n["lon"] > 170 for n in notes) and any(n["lon"] < -170 for n in notes)
+
+
+def test_does_not_seed_without_flag(tmp_path, monkeypatch):
+    assert seeded_notes(monkeypatch, tmp_path, flag=None) == []
+    assert seeded_notes(monkeypatch, tmp_path, flag="0") == []
+
+
+def test_seed_does_not_duplicate_on_restart(tmp_path, monkeypatch):
+    first = seeded_notes(monkeypatch, tmp_path)
+    assert seeded_notes(monkeypatch, tmp_path) == first
+
+
+def test_seed_leaves_non_empty_database_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOTES_DB", str(tmp_path / "notes.db"))
+    main._recent_posts.clear()
+    post(TestClient(main.app), "mine")
+    notes = seeded_notes(monkeypatch, tmp_path)
+    assert [n["text"] for n in notes] == ["mine"]
+
+
+def test_seed_rows_pass_note_validation():
+    from app.demo_notes import DEMO_NOTES
+
+    for lat, lon, text, _days in DEMO_NOTES:
+        note = main.NoteIn(lat=lat, lon=lon, text=text)
+        assert note.text == text

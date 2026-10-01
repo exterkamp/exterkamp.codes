@@ -28,3 +28,7 @@ services:
   frontend:
     ports:
       - "${DEV_PORT:-8086}:80"
+  backend:
+    environment:
+      # Seed ~30 demo notes into an empty database. Never set in the base file.
+      SEED_DEMO_NOTES: "1"
