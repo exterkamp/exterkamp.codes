@@ -37,9 +37,9 @@ export class NoteRotation {
     return this.entries.filter((e) => e.armed && !e.leaving).map((e) => e.note);
   }
 
-  /** Ids of the server's notes in the current set, to ask for a different one next. */
+  /** Ids of the saved notes in the current set (including the visitor's own), to ask for different ones next. */
   currentIds(): number[] {
-    return this.entries.filter((e) => !e.own && !e.leaving && e.note.id > 0).map((e) => e.note.id).slice(0, MAX_EXCLUDE);
+    return this.entries.filter((e) => !e.leaving && e.note.id > 0).map((e) => e.note.id).slice(0, MAX_EXCLUDE);
   }
 
   /**

@@ -82,9 +82,10 @@ describe('NoteRotation', () => {
     expect(ids(r.markers())).toEqual([1, -1]);
     expect(r.currentIds()).toEqual([1]);
 
+    // Once saved it has a real id, so the next request asks for something else than it.
     r.replace(-1, note(50));
     expect(ids(r.markers())).toEqual([1, 50]);
-    expect(r.currentIds()).toEqual([1]);
+    expect(r.currentIds()).toEqual([1, 50]);
 
     let inView = true;
     r.setServerNotes([note(2)], () => inView);
