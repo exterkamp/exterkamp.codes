@@ -219,15 +219,11 @@ export class AsciiGlobe {
       let runStep = 0;
       const flush = () => {
         if (!run) return;
-        if (runStep === 0 && run.trim() === '') {
-          fragment.appendChild(document.createTextNode(run));
-        } else {
-          const span = document.createElement('span');
-          span.style.backgroundColor = styles[runStep].background;
-          span.style.color = styles[runStep].color;
-          span.textContent = run;
-          fragment.appendChild(span);
-        }
+        const span = document.createElement('span');
+        span.style.backgroundColor = styles[runStep].background;
+        span.style.color = styles[runStep].color;
+        span.textContent = run;
+        fragment.appendChild(span);
         run = '';
       };
       for (let c = 0; c < space.cols; c++) {

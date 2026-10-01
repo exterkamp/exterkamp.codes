@@ -20,7 +20,7 @@ export interface Space {
   rows: number;
   /** How dark each cell is in [0, 1], row by row: 0 is the page's white, 1 is solid space. */
   levels: Float32Array;
-  /** The star in each cell, or ' '. Only solid cells (level 1) have one. */
+  /** The star in each cell, or ' '. Only cells at level 1 have one: the solid interior, and fade cells the noise pushed all the way up. */
   glyphs: string[];
 }
 
