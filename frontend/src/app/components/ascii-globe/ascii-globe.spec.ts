@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { AsciiGlobe, buildSpace, SPACE_COLS, SPACE_ROWS } from './ascii-globe';
+import { AsciiGlobe, buildSpace, RESIZE_DEBOUNCE_MS, SPACE_FADE, SPACE_ROWS, spaceCols } from './ascii-globe';
 import { css, SPACE_COLOR } from './globe-palette';
 import { MARKER, unproject } from './globe-renderer';
 import { RAMP } from './space';
@@ -38,58 +38,124 @@ describe('AsciiGlobe', () => {
     expect(colors.size).toBeGreaterThan(8);
   });
 
+  /** The text of each of the space's three blocks, as lines. */
+  const spaceBlocks = (space: HTMLElement) => {
+    const block = (name: string) => space.querySelector<HTMLElement>(`.${name}`)!;
+    return {
+      top: block('fade-top'),
+      solid: block('solid'),
+      bottom: block('fade-bottom'),
+      lines: (name: string) => block(name).textContent!.split('\n'),
+    };
+  };
+
+  it('sizes the grid from the viewport width', () => {
+    expect(spaceCols(1440, 7.2)).toBe(200);
+    expect(spaceCols(1920, 7.2)).toBe(267);
+    expect(spaceCols(390, 4.2)).toBe(93);
+    // Never narrower than the globe.
+    expect(spaceCols(100, 7.2)).toBe(61);
+    expect(buildSpace(200).cols).toBe(200);
+    expect(buildSpace(200).rows).toBe(SPACE_ROWS);
+    expect(SPACE_ROWS).toBe(37 + 12 + 12);
+  });
+
   it('draws the dark space once, static and hidden from screen readers', async () => {
     const fixture = TestBed.createComponent(AsciiGlobe);
     await fixture.whenStable();
     const space: HTMLElement = fixture.nativeElement.querySelector('.space');
     expect(space.getAttribute('aria-hidden')).toBe('true');
-    const lines = space.textContent!.split('\n');
-    expect(lines.length).toBe(SPACE_ROWS);
-    expect(lines.every((l) => l.length === SPACE_COLS)).toBe(true);
+    const { lines } = spaceBlocks(space);
+    const cols = spaceCols(0, 7);
+    expect(lines('fade-top').length).toBe(SPACE_FADE.top);
+    expect(lines('solid').length).toBe(37);
+    expect(lines('fade-bottom').length).toBe(SPACE_FADE.bottom);
+    for (const name of ['fade-top', 'solid', 'fade-bottom']) expect(lines(name).every((l) => l.length === cols)).toBe(true);
     const before = space.innerHTML;
+    const changes: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => changes.push(...records));
+    observer.observe(space, { subtree: true, childList: true, attributes: true, characterData: true });
     // The globe spins on, but the space never changes.
     redrawGlobe(fixture);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    observer.disconnect();
+    expect(changes.length).toBe(0);
     expect(space.innerHTML).toBe(before);
-    expect(buildSpace().glyphs).toEqual(buildSpace().glyphs);
-    expect(Array.from(buildSpace().levels)).toEqual(Array.from(buildSpace().levels));
-    expect(SPACE_COLS).toBe(61 + 2 * 16);
-    expect(SPACE_ROWS).toBe(37 + 12 + 2);
+    expect(buildSpace(120).glyphs).toEqual(buildSpace(120).glyphs);
+    expect(Array.from(buildSpace(120).levels)).toEqual(Array.from(buildSpace(120).levels));
   });
 
-  it('draws the fade with ramp characters on tinted cells, and the interior solid', async () => {
+  it('draws the fades with ramp characters on tinted cells, and the interior as one solid block', async () => {
     const fixture = TestBed.createComponent(AsciiGlobe);
     await fixture.whenStable();
     const space: HTMLElement = fixture.nativeElement.querySelector('.space');
-    const lines = space.textContent!.split('\n');
-    // The top row is all fade: only ramp characters, never blank.
-    expect([...lines[0]].every((ch) => RAMP.includes(ch))).toBe(true);
+    const { top, solid, bottom, lines } = spaceBlocks(space);
+    // The first and last rows are nearly all fade: ramp characters, mostly never blank.
+    const ramp = (line: string) => [...line].filter((ch) => RAMP.includes(ch)).length / line.length;
+    expect(ramp(lines('fade-top')[0])).toBeGreaterThan(0.5);
+    expect(ramp(lines('fade-bottom')[SPACE_FADE.bottom - 1])).toBeGreaterThan(0.5);
 
     const probe = document.createElement('i');
     probe.style.backgroundColor = css(SPACE_COLOR);
-    const solid = probe.style.backgroundColor;
-    const spans: HTMLElement[] = [...space.querySelectorAll('span')];
-    const backgrounds = new Set(spans.map((s) => s.style.backgroundColor));
-    // Several tint steps between the page white (no background) and solid space.
-    expect(backgrounds.has('')).toBe(true);
-    expect(backgrounds.has(solid)).toBe(true);
-    expect(backgrounds.size).toBeGreaterThan(4);
-    // Neighbors on one tint step share a span.
-    expect(spans.length).toBeLessThan((SPACE_COLS * SPACE_ROWS) / 2);
-
-    // The middle row, in the interior, is made of solid spans (stars and blanks only).
-    const mid = Math.floor(SPACE_ROWS / 2);
-    const row = lines.slice(0, mid).join('\n').length + (mid > 0 ? 1 : 0);
-    const walk = document.createTreeWalker(space, NodeFilter.SHOW_ALL);
-    let offset = 0;
-    const midSpans: HTMLElement[] = [];
-    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-      if (n.nodeType !== Node.TEXT_NODE) continue;
-      const parent = n.parentElement!;
-      if (offset + n.textContent!.length > row + 20 && offset < row + SPACE_COLS - 20 && parent !== space) midSpans.push(parent);
-      offset += n.textContent!.length;
+    const spanBackgrounds = (block: HTMLElement) =>
+      new Set([...block.querySelectorAll('span')].map((s) => (s as HTMLElement).style.backgroundColor));
+    for (const block of [top, bottom]) {
+      const backgrounds = spanBackgrounds(block);
+      // Several tint steps between the page white (no background) and solid space.
+      expect(backgrounds.has('')).toBe(true);
+      expect(backgrounds.size).toBeGreaterThan(4);
     }
-    expect(midSpans.length).toBeGreaterThan(0);
-    expect(midSpans.every((s) => s.style.backgroundColor === solid)).toBe(true);
+    // The interior is a single element with the space color, holding no cells.
+    expect(solid.style.backgroundColor).toBe(probe.style.backgroundColor);
+    expect(solid.querySelectorAll('*').length).toBe(0);
+    expect(solid.textContent!.replace(/[\n ]/g, '').length).toBeGreaterThan(0);
+  });
+
+  it('stays within about 8,000 nodes at 1920px wide, and builds quickly', () => {
+    const start = performance.now();
+    const space = buildSpace(spaceCols(1920, 7.2));
+    expect(performance.now() - start).toBeLessThan(30);
+    // Fade rows are runs of spans, at most one per cell; the interior is one node.
+    let nodes = 1;
+    for (let r = 0; r < space.rows; r++) {
+      if (r >= SPACE_FADE.top && r < space.rows - SPACE_FADE.bottom) continue;
+      let last = -1;
+      for (let c = 0; c < space.cols; c++) {
+        const i = r * space.cols + c;
+        const key = space.levels[i] >= 1 ? 6 : Math.min(5, Math.floor(space.levels[i] * 6));
+        if (key !== last) nodes++;
+        last = key;
+      }
+    }
+    expect(nodes).toBeLessThan(8000);
+  });
+
+  it('rebuilds only after the width settles, and never while the globe spins', async () => {
+    const fixture = TestBed.createComponent(AsciiGlobe);
+    await fixture.whenStable();
+    const space: HTMLElement = fixture.nativeElement.querySelector('.space');
+    const changes: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => changes.push(...records));
+    observer.observe(space, { subtree: true, childList: true, attributes: true, characterData: true });
+    vi.spyOn(fixture.componentInstance as unknown as { viewportWidth(): number }, 'viewportWidth').mockReturnValue(1000);
+    // A burst of resizes is one rebuild, once the width holds still.
+    for (let i = 0; i < 5; i++) window.dispatchEvent(new Event('resize'));
+    await new Promise((resolve) => setTimeout(resolve, RESIZE_DEBOUNCE_MS / 2));
+    expect(changes.length).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, RESIZE_DEBOUNCE_MS));
+    observer.disconnect();
+    expect(changes.length).toBeGreaterThan(0);
+    expect(space.querySelector('.solid')!.textContent!.split('\n')[0].length).toBe(spaceCols(1000, 7));
+    expect(RESIZE_DEBOUNCE_MS).toBeGreaterThanOrEqual(100);
+  });
+
+  it('leaves the page no wider than the viewport, and the band does not take clicks', async () => {
+    const fixture = TestBed.createComponent(AsciiGlobe);
+    await fixture.whenStable();
+    const space: HTMLElement = fixture.nativeElement.querySelector('.space');
+    const root = document.documentElement;
+    expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth);
+    expect(space.style.width).toBe(`${root.clientWidth}px`);
   });
 
   describe('dragging', () => {

@@ -15,21 +15,22 @@
   width: 100%;
   max-width: 44rem;
   // The dark space is drawn in the same character cells as the globe, so both share one font.
-  // The space is SPACE_COLS (93) cells wide, about 55.8em, and it has to fit the viewport
+  // The globe is 61 cells wide, about 36.6em, and it has to fit the viewport
   // (minus the 1rem gutters above and the default 8px body margins).
   font-family: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
   font-size: min(12px, calc((100vw - 3rem) / 57));
   line-height: 1;
-  // Room for the space's rows above and below the globe (SPACE_PAD), so it never covers the text around it.
-  padding: 12em 0 2em;
+  // Room for the space's fade rows above and below the globe (SPACE_FADE), so it never covers the text around it.
+  padding: 12em 0;
 }
 
-// Behind everything, sized by its own characters and centered on the globe.
+// Behind everything: a band as wide as the page, as tall as the stage. Script sets its left and width
+// (the page width without a scrollbar), so it reaches both edges without making the page scroll sideways.
 .space {
   position: absolute;
   top: 0;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: 0;
+  overflow: hidden;
   white-space: pre;
   user-select: none;
   pointer-events: none;

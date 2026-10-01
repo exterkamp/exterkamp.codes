@@ -21,25 +21,31 @@ import { createSpace, rampChar, Space } from './space';
 const COLS = 61;
 // Monospace glyphs are about 0.6 as wide as they are tall; this keeps the globe round.
 const ROWS = Math.round(COLS * 0.6);
-/** Dark space around the globe, in character cells. The top and sides fade into the white page; the bottom is a hard edge. */
-export const SPACE_PAD = { top: 12, side: 16, bottom: 2 };
-/** Cells over which the dark space fades from white to solid. */
-export const SPACE_FADE = { top: 12, side: 16 };
-export const SPACE_COLS = COLS + 2 * SPACE_PAD.side;
-export const SPACE_ROWS = ROWS + SPACE_PAD.top + SPACE_PAD.bottom;
+/** Rows of dark space above and below the globe. Each edge fades over its own rows: from the white page at the top, back to it at the bottom. */
+export const SPACE_FADE = { top: 12, bottom: 12 };
+export const SPACE_ROWS = ROWS + SPACE_FADE.top + SPACE_FADE.bottom;
 /** Fixed seed and density for the stars, so they are the same on every frame and every visit. */
 const STAR_SEED = 20;
 const STAR_CHANCE = 0.035;
+/** How long (ms) the window width must hold still before the space is rebuilt for it. */
+export const RESIZE_DEBOUNCE_MS = 150;
 
-export function buildSpace(): Space {
+/** How many character cells of the given width cover the viewport (one more than fits is fine: the band clips it). */
+export function spaceCols(viewportWidth: number, charWidth: number): number {
+  return Math.max(COLS, Math.ceil(viewportWidth / charWidth));
+}
+
+/** The space for a band `cols` cells wide, with the globe in the middle of it. */
+export function buildSpace(cols: number): Space {
   return createSpace({
-    cols: SPACE_COLS,
+    cols,
     rows: SPACE_ROWS,
     fadeTop: SPACE_FADE.top,
-    fadeSide: SPACE_FADE.side,
+    fadeBottom: SPACE_FADE.bottom,
     seed: STAR_SEED,
     starChance: STAR_CHANCE,
-    clear: { col: SPACE_COLS / 2, row: SPACE_PAD.top + ROWS / 2, rx: COLS / 2, ry: ROWS / 2 },
+    centerCol: Math.floor(cols / 2),
+    clear: { col: cols / 2, row: SPACE_FADE.top + ROWS / 2, rx: COLS / 2, ry: ROWS / 2 },
   });
 }
 
@@ -74,6 +80,8 @@ export class AsciiGlobe {
   private readonly injector = inject(Injector);
   private readonly changeDetector = inject(ChangeDetectorRef);
   private readonly destroyRef = inject(DestroyRef);
+  private spaceCols = 0;
+  private spaceNodes: Node[] = [];
 
   protected readonly maxLength = MAX_NOTE_LENGTH;
   /** The notes on the globe: this rotation's set from the server, plus the visitor's own. */
@@ -220,41 +228,78 @@ export class AsciiGlobe {
     return cells;
   }
 
-  /** Draws the dark space once. It is static: the same grid, grain and stars on every frame. */
+  /** The width the band should cover: the page, without a vertical scrollbar. */
+  protected viewportWidth(): number {
+    return document.documentElement.clientWidth;
+  }
+
+  /**
+   * Draws the dark space as a band as wide as the page. It is static: the same grain and stars on every frame, so it
+   * is only rebuilt when the page width changes. The top and bottom fades are spans per run of cells; the solid middle
+   * is one element with a CSS background, holding only the stars.
+   */
   private drawSpace(el: HTMLElement) {
-    const space = buildSpace();
+    const width = this.viewportWidth();
+    // The stage is centered, so the band reaches the page's left edge by stepping back by the stage's own offset.
+    el.style.left = `${-el.parentElement!.getBoundingClientRect().left}px`;
+    el.style.width = `${width}px`;
+    const probe = document.createElement('span');
+    probe.textContent = 'M'.repeat(100);
+    el.replaceChildren(probe);
+    const charWidth = probe.getBoundingClientRect().width / 100;
+    const cols = spaceCols(width, charWidth || 7);
+    if (cols === this.spaceCols) {
+      el.replaceChildren(...this.spaceNodes);
+      return;
+    }
+    this.spaceCols = cols;
+    const space = buildSpace(cols);
     const styles = Array.from({ length: TINT_STEPS }, (_, step) => ({
       background: step === 0 ? '' : css(tintColor(step)),
       color: css(step === TINT_STEPS - 1 ? STAR_COLOR : inkColor(step)),
     }));
-    const fragment = document.createDocumentFragment();
-    for (let r = 0; r < space.rows; r++) {
-      // Neighboring cells on one tint step share a span.
-      let run = '';
-      let runStep = 0;
-      const flush = () => {
-        if (!run) return;
-        const span = document.createElement('span');
-        span.style.backgroundColor = styles[runStep].background;
-        span.style.color = styles[runStep].color;
-        span.textContent = run;
-        fragment.appendChild(span);
-        run = '';
-      };
-      for (let c = 0; c < space.cols; c++) {
-        const i = r * space.cols + c;
-        const level = space.levels[i];
-        const step = tintStep(level);
-        if (step !== runStep) {
-          flush();
-          runStep = step;
+    const fade = (from: number, to: number, className: string) => {
+      const block = document.createElement('div');
+      block.className = className;
+      for (let r = from; r < to; r++) {
+        // Neighboring cells on one tint step share a span.
+        let run = '';
+        let runStep = 0;
+        const flush = () => {
+          if (!run) return;
+          const span = document.createElement('span');
+          span.style.backgroundColor = styles[runStep].background;
+          span.style.color = styles[runStep].color;
+          span.textContent = run;
+          block.appendChild(span);
+          run = '';
+        };
+        for (let c = 0; c < space.cols; c++) {
+          const i = r * space.cols + c;
+          const level = space.levels[i];
+          const step = tintStep(level);
+          if (step !== runStep) {
+            flush();
+            runStep = step;
+          }
+          run += level >= 1 ? space.glyphs[i] : rampChar(level);
         }
-        run += level >= 1 ? space.glyphs[i] : rampChar(level);
+        flush();
+        if (r < to - 1) block.appendChild(document.createTextNode('\n'));
       }
-      flush();
-      if (r < space.rows - 1) fragment.appendChild(document.createTextNode('\n'));
+      return block;
+    };
+    const solid = document.createElement('div');
+    solid.className = 'solid';
+    solid.style.backgroundColor = styles[TINT_STEPS - 1].background;
+    solid.style.color = styles[TINT_STEPS - 1].color;
+    const lines: string[] = [];
+    for (let r = SPACE_FADE.top; r < space.rows - SPACE_FADE.bottom; r++) {
+      lines.push(space.glyphs.slice(r * space.cols, (r + 1) * space.cols).join(''));
     }
-    el.replaceChildren(fragment);
+    solid.textContent = lines.join('\n');
+    this.spaceNodes = [fade(0, SPACE_FADE.top, 'fade-top'), solid, fade(space.rows - SPACE_FADE.bottom, space.rows, 'fade-bottom')];
+    el.replaceChildren(...this.spaceNodes);
   }
 
   /**
@@ -290,6 +335,17 @@ export class AsciiGlobe {
     afterNextRender(() => {
       const el = this.pre().nativeElement;
       this.drawSpace(this.spaceEl().nativeElement);
+      // Only a settled width rebuilds the space, never an animation frame.
+      let resizeTimer = 0;
+      const onResize = () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(() => this.drawSpace(this.spaceEl().nativeElement), RESIZE_DEBOUNCE_MS);
+      };
+      window.addEventListener('resize', onResize);
+      destroyRef.onDestroy(() => {
+        clearTimeout(resizeTimer);
+        window.removeEventListener('resize', onResize);
+      });
       const render = createGlobe({ cols: COLS, rows: ROWS, tilt: TILT, light: LIGHT });
       // One span per cell, made once. A frame only touches the cells whose character or color changed.
       const cells = this.buildCells(el);
