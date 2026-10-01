@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assignSlots,
   cellCenter,
+  LANE_HOLD,
   LANE_HYSTERESIS,
   LANES,
   laneFor,
@@ -141,11 +142,52 @@ describe('layoutLanes', () => {
     expect(clear[1].lane).toBe(1);
   });
 
+  it('holds a neighbor lane for LANE_HOLD seconds after the last move, even when home is clear', () => {
+    const state = (since: number) => [undefined, { home: 1, lane: 0, side: 1 as const, since }];
+    const items = [one(300, 130, 0), one(500, 100, 0)];
+    expect(layoutLanes(items, tops, bounds, state(0), PANEL_GAP, 1)[1].lane).toBe(0);
+    expect(layoutLanes(items, tops, bounds, state(0), PANEL_GAP, LANE_HOLD - 0.1)[1].lane).toBe(0);
+    expect(layoutLanes(items, tops, bounds, state(0), PANEL_GAP, LANE_HOLD + 0.1)[1].lane).toBe(1);
+  });
+
   it('never puts a panel on any shown pin, nor a line under another panel', () => {
     // The second pin sits where the first panel would be.
     const [a, b] = layoutLanes([one(300, 130, 0), one(350, 130, 0)], tops, bounds);
     for (const [r, pins] of [[a.rect, [{ x: 300, y: 130 }, { x: 350, y: 130 }]], [b.rect, [{ x: 300, y: 130 }, { x: 350, y: 130 }]]] as const)
       for (const p of pins) expect(p.x >= r.left && p.x <= r.left + r.width && p.y >= r.top && p.y <= r.top + r.height).toBe(false);
+  });
+
+  describe('lines under panels', () => {
+    // A pin below the lane-1 panel, whose panel sits in lane 0 on its right: its line runs down through
+    // the lane-1 panel for a pin at (300, 130), whose panel is at x 328..428.
+    const low = one(380, 190, 0);
+    const high = one(300, 130, 0);
+    const stay = { home: 1, lane: 0, side: 1 as const, since: 0 };
+    const crosses = (r: { left: number; top: number; width: number; height: number }, pin: { x: number; y: number }, other: typeof r) => {
+      const from = nearestEdgePoint(r, pin);
+      for (let t = 0; t <= 1; t += 0.01) {
+        const x = from.x + (pin.x - from.x) * t;
+        const y = from.y + (pin.y - from.y) * t;
+        if (x >= other.left && x <= other.left + other.width && y >= other.top && y <= other.top + other.height) return true;
+      }
+      return false;
+    };
+
+    it('moves a later panel whose line would run under an earlier panel', () => {
+      const [a, b] = layoutLanes([high, low], tops, bounds, [undefined, stay]);
+      expect(a.lane).toBe(1);
+      expect(b.lane).not.toBe(0);
+      expect(crosses(b.rect, low.pin, a.rect)).toBe(false);
+      expect(crosses(a.rect, high.pin, b.rect)).toBe(false);
+    });
+
+    it('moves a later panel that would cover the line of an earlier panel', () => {
+      const [f, g] = layoutLanes([low, high], tops, bounds, [stay]);
+      expect(f.lane).toBe(0);
+      expect(g.lane).not.toBe(1);
+      expect(crosses(f.rect, low.pin, g.rect)).toBe(false);
+      expect(crosses(g.rect, high.pin, f.rect)).toBe(false);
+    });
   });
 
   it('sends a panel to a lane that keeps its line short', () => {
