@@ -61,8 +61,8 @@ const overlap = (a: Rect, b: Rect) =>
 
 /**
  * Places a panel beside each marker, inside `bounds` (whose top-left is the origin). Panels are
- * placed in order. Each tries the right of its marker, then left, above and below, and takes the
- * first spot that fits; if none does, the one with the least overlap and displacement.
+ * placed in order. Each tries the right of its marker, then the left, each shifted up or down in
+ * turn, then above and below, and takes the cheapest spot: least overlap, then least displacement.
  */
 export function placePanels(
   markers: readonly { x: number; y: number }[],
@@ -73,11 +73,14 @@ export function placePanels(
   const placed: Rect[] = [];
   markers.forEach((m, i) => {
     const { width: w, height: h } = sizes[i];
+    // Beside the marker first, then the same sides shifted up and down by whole panel heights,
+    // so a crowd of panels can stack instead of overlapping.
+    const shifts = [0, -1, 1, -2, 2].map((k) => k * (h + 4));
+    const sides = [m.x + gap, m.x - gap - w];
     const candidates = [
-      { left: m.x + gap, top: m.y - h / 2 },
-      { left: m.x - gap - w, top: m.y - h / 2 },
-      { left: m.x - w / 2, top: m.y - gap - h },
-      { left: m.x - w / 2, top: m.y + gap },
+      ...shifts.flatMap((dy) => sides.map((left) => ({ left, top: m.y - h / 2 + dy, dy }))),
+      { left: m.x - w / 2, top: m.y - gap - h, dy: 0 },
+      { left: m.x - w / 2, top: m.y + gap, dy: 0 },
     ];
     let best: Rect | null = null;
     let bestCost = Infinity;
@@ -93,7 +96,9 @@ export function placePanels(
       const cost =
         placed.reduce((sum, p) => sum + overlap(rect, p), 0) * 10 +
         (covers ? 1e6 : 0) +
-        Math.hypot(rect.left - c.left, rect.top - c.top);
+        Math.hypot(rect.left - c.left, rect.top - c.top) +
+        // Prefer staying level with the marker.
+        Math.abs(c.dy) * 0.5;
       if (cost < bestCost) {
         best = rect;
         bestCost = cost;

@@ -119,6 +119,20 @@ describe('placePanels', () => {
   });
 });
 
+describe('placePanels on a narrow stage', () => {
+  it('stacks 3 panels without overlap when their markers are close together', () => {
+    const size = { width: 190, height: 50 };
+    const markers = [{ x: 250, y: 150 }, { x: 190, y: 170 }, { x: 175, y: 190 }];
+    const rects = placePanels(markers, [size, size, size], { width: 358, height: 380 });
+    for (let i = 0; i < 3; i++) {
+      for (let j = i + 1; j < 3; j++) {
+        const [a, b] = [rects[i], rects[j]];
+        expect(a.top + a.height <= b.top || b.top + b.height <= a.top || a.left + a.width <= b.left || b.left + b.width <= a.left).toBe(true);
+      }
+    }
+  });
+});
+
 describe('nearestEdgePoint', () => {
   const rect = { left: 100, top: 100, width: 50, height: 20 };
   it('is the closest point on the rectangle', () => {
