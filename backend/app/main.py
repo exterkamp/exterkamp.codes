@@ -71,7 +71,9 @@ _recent_posts: dict[str, deque[float]] = defaultdict(deque)
 
 
 def client_key(request: Request) -> str:
-    # nginx sets X-Real-IP to the connecting address.
+    # nginx sets X-Real-IP to the visitor's address (CF-Connecting-IP behind
+    # cloudflared, else the connecting address). Only trust it while the backend
+    # is reachable solely through nginx.
     return request.headers.get("x-real-ip") or (request.client.host if request.client else "unknown")
 
 
