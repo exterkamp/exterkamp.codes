@@ -134,6 +134,14 @@ describe('placePanels on a narrow stage', () => {
   });
 });
 
+describe('placePanels in a tight stage', () => {
+  it('moves above or below rather than cover its own marker when both sides are clamped onto it', () => {
+    const m = { x: 100, y: 150 };
+    const [r] = placePanels([m], [{ width: 100, height: 40 }], { width: 120, height: 300 }, 14);
+    expect(m.x >= r.left && m.x <= r.left + r.width && m.y >= r.top && m.y <= r.top + r.height).toBe(false);
+  });
+});
+
 describe('placePanels around the globe', () => {
   const size = { width: 100, height: 40 };
   const bounds = { width: 600, height: 400 };
