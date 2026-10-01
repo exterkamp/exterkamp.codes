@@ -1,10 +1,11 @@
-import { createSpace, density, level, NOISE_AMPLITUDE, RAMP, rampChar, seededRandom, SpaceOptions, STAR_GLYPHS } from './space';
+import { cellRandom, createSpace, density, level, NOISE_AMPLITUDE, RAMP, rampChar, SpaceOptions, STAR_GLYPHS } from './space';
 
 const options: SpaceOptions = {
   cols: 60,
   rows: 40,
   fadeTop: 8,
-  fadeSide: 12,
+  fadeBottom: 8,
+  centerCol: 30,
   seed: 7,
   starChance: 0.05,
   clear: { col: 30, row: 22, rx: 15, ry: 9 },
@@ -22,7 +23,7 @@ const colMean = (levels: Float32Array, cols: number, col: number, from: number, 
 };
 
 // A larger grid with the real fade widths, so the averages are smooth.
-const wide: SpaceOptions = { ...options, cols: 93, rows: 60, fadeTop: 12, fadeSide: 16 };
+const wide: SpaceOptions = { ...options, cols: 93, rows: 60, fadeTop: 12, fadeBottom: 12, centerCol: 46 };
 
 describe('space fade', () => {
   it('gives the same levels every time, all within [0, 1]', () => {
@@ -36,21 +37,27 @@ describe('space fade', () => {
 
   it('rises from the top edge row by row, from below 0.2 to above 0.8', () => {
     const { levels, cols } = createSpace(wide);
-    const means = Array.from({ length: wide.fadeTop }, (_, r) => rowMean(levels, cols, r, wide.fadeSide, cols - wide.fadeSide));
+    const means = Array.from({ length: wide.fadeTop }, (_, r) => rowMean(levels, cols, r, 0, cols));
     expect(means[0]).toBeLessThan(0.2);
     expect(means[wide.fadeTop - 1]).toBeGreaterThan(0.8);
     means.slice(1).forEach((m, i) => expect(m).toBeGreaterThanOrEqual(means[i]));
   });
 
-  it('rises from the left and right edges column by column', () => {
+  it('falls at the bottom edge row by row, mirroring the top, from above 0.8 to below 0.2', () => {
     const { levels, cols, rows } = createSpace(wide);
-    for (const fromRight of [false, true]) {
-      const means = Array.from({ length: wide.fadeSide }, (_, c) =>
-        colMean(levels, cols, fromRight ? cols - 1 - c : c, wide.fadeTop, rows),
-      );
-      expect(means[0]).toBeLessThan(0.2);
-      expect(means[wide.fadeSide - 1]).toBeGreaterThan(0.8);
-      means.slice(1).forEach((m, i) => expect(m).toBeGreaterThanOrEqual(means[i]));
+    const bottom = Array.from({ length: wide.fadeBottom }, (_, r) => rowMean(levels, cols, rows - wide.fadeBottom + r, 0, cols));
+    expect(bottom[0]).toBeGreaterThan(0.8);
+    expect(bottom[wide.fadeBottom - 1]).toBeLessThan(0.2);
+    bottom.slice(1).forEach((m, i) => expect(m).toBeLessThanOrEqual(bottom[i]));
+    // The same ramp as the top, read from the other end.
+    const top = Array.from({ length: wide.fadeTop }, (_, r) => rowMean(levels, cols, r, 0, cols));
+    top.forEach((m, r) => expect(Math.abs(m - bottom[wide.fadeBottom - 1 - r])).toBeLessThan(0.1));
+  });
+
+  it('never fades at the sides: every column, including the first and last, is solid in the solid rows', () => {
+    const { levels, cols, rows } = createSpace(wide);
+    for (let r = wide.fadeTop; r < rows - wide.fadeBottom; r++) {
+      for (let c = 0; c < cols; c++) expect(levels[r * cols + c]).toBe(1);
     }
   });
 
@@ -64,17 +71,21 @@ describe('space fade', () => {
     }
   });
 
-  it('is solid beyond the fade, and has no fade at the bottom edge', () => {
+  it('is solid between the two fades', () => {
     const { levels, cols, rows } = createSpace(options);
-    for (let r = options.fadeTop; r < rows; r++) {
-      for (let c = options.fadeSide; c < cols - options.fadeSide; c++) expect(levels[r * cols + c]).toBe(1);
+    for (let r = options.fadeTop; r < rows - options.fadeBottom; r++) {
+      for (let c = 0; c < cols; c++) expect(levels[r * cols + c]).toBe(1);
     }
-    expect(levels[(rows - 1) * cols + 30]).toBe(1);
+  });
+
+  it('gives a bit of everything near the top edge and nearly nothing there at the very first row', () => {
+    expect(density(0, 40, 8, 8)).toBeLessThan(0.1);
+    expect(density(39, 40, 8, 8)).toBeLessThan(0.1);
   });
 
   it('has a density of 1 away from every edge, and noise only moves a level by half the amplitude', () => {
-    expect(density(30, 20, 60, 40, 8, 12)).toBe(1);
-    expect(density(0, 20, 60, 40, 8, 12)).toBeLessThan(0.1);
+    expect(density(20, 40, 8, 8)).toBe(1);
+    expect(density(0, 40, 8, 8)).toBeLessThan(0.1);
     expect(level(0.5, 0)).toBeCloseTo(0.5 - NOISE_AMPLITUDE / 2);
     expect(level(0.5, 0.5)).toBe(0.5);
     expect(level(1, 0)).toBe(1);
@@ -135,25 +146,29 @@ describe('space stars', () => {
     });
   });
 
-  it('stay exactly where they were with the old dither, in the solid interior', () => {
-    // The old rule: draw two numbers per cell from the seed; a star where the roll is low, outside the globe.
-    const random = seededRandom(options.seed);
-    const { glyphs, cols, rows } = createSpace(options);
-    const { col, row, rx, ry } = options.clear;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const roll = random();
-        const glyph = STAR_GLYPHS[Math.floor(random() * STAR_GLYPHS.length)];
-        const interior = r >= options.fadeTop && c >= options.fadeSide && c < cols - options.fadeSide;
-        const inGlobe = Math.hypot((c + 0.5 - col) / rx, (r + 0.5 - row) / ry) <= 1;
-        if (interior) expect(glyphs[r * cols + c]).toBe(!inGlobe && roll < options.starChance ? glyph : ' ');
+  it('keep their places relative to the center column when the width changes', () => {
+    const narrow = createSpace({ ...wide, cols: 61, centerCol: 30, clear: { ...wide.clear, col: 30.5 } });
+    const broad = createSpace({ ...wide, cols: 121, centerCol: 60, clear: { ...wide.clear, col: 60.5 } });
+    let stars = 0;
+    for (let r = 0; r < wide.rows; r++) {
+      for (let dc = -30; dc <= 30; dc++) {
+        const a = narrow.glyphs[r * 61 + 30 + dc];
+        const b = broad.glyphs[r * 121 + 60 + dc];
+        // The globe clearing is centered on both, so it is the same place too.
+        expect(b).toBe(a);
+        if (a !== ' ') stars++;
       }
     }
+    expect(stars).toBeGreaterThan(20);
   });
 
-  it('draws the seeded random numbers the same every time', () => {
-    const a = seededRandom(3);
-    const b = seededRandom(3);
-    expect([a(), a(), a()]).toEqual([b(), b(), b()]);
+  it('draws the seeded random numbers the same every time, in [0, 1)', () => {
+    expect(cellRandom(3, 4, -5, 0)).toBe(cellRandom(3, 4, -5, 0));
+    expect(cellRandom(3, 4, -5, 0)).not.toBe(cellRandom(3, 4, -5, 1));
+    for (let i = 0; i < 1000; i++) {
+      const v = cellRandom(3, i, i - 500, 0);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThan(1);
+    }
   });
 });

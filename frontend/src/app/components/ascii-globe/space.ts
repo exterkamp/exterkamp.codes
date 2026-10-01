@@ -1,16 +1,18 @@
-/** The dark ASCII space behind the globe: a grid of cells that fade from the white page to solid dark, with a few stars. */
+/** The dark ASCII space behind the globe: a full-width band of cells that fades in from the white page at the top and out at the bottom, with a few stars. */
 
 export interface SpaceOptions {
   cols: number;
   rows: number;
   /** Rows over which the top edge fades from nearly white to solid dark. */
   fadeTop: number;
-  /** Columns over which each side edge does the same. */
-  fadeSide: number;
-  /** Seed for star placement; the same seed always gives the same stars. */
+  /** Rows over which the bottom edge fades from solid dark to nearly white: the mirror of the top. */
+  fadeBottom: number;
+  /** Seed for star placement and grain; the same seed always gives the same cells. */
   seed: number;
   /** Chance that a dark cell holds a star. */
   starChance: number;
+  /** Cells are keyed by their row and their column relative to this one (usually the middle), so changing `cols` never shuffles the cells near the center. */
+  centerCol: number;
   /** Cells inside this ellipse (the globe's outline, in cells) get no stars, since the globe is drawn over them. */
   clear: { col: number; row: number; rx: number; ry: number };
 }
@@ -37,10 +39,9 @@ export function rampChar(level: number): string {
   return RAMP[Math.max(0, Math.min(RAMP.length - 1, Math.floor(level * RAMP.length)))];
 }
 
-/** How dark a cell should be before noise, in (0, 1]: low at the top and side edges, 1 once `fade` cells in. */
-export function density(col: number, row: number, cols: number, rows: number, fadeTop: number, fadeSide: number): number {
-  const edge = Math.min((row + 0.5) / fadeTop, (col + 0.5) / fadeSide, (cols - col - 0.5) / fadeSide);
-  return Math.min(1, edge);
+/** How dark a cell should be before noise, in (0, 1]: low at the top and bottom edges, 1 once `fade` rows in. The sides never fade. */
+export function density(row: number, rows: number, fadeTop: number, fadeBottom: number): number {
+  return Math.min(1, (row + 0.5) / fadeTop, (rows - row - 0.5) / fadeBottom);
 }
 
 /** The level of a cell: its density pushed up or down by `noise` in [0, 1), kept in [0, 1]. Solid cells (density 1) stay solid. */
@@ -49,34 +50,28 @@ export function level(densityValue: number, noise: number): number {
   return Math.max(0, Math.min(1, densityValue + (noise - 0.5) * NOISE_AMPLITUDE));
 }
 
-/** A small seeded random number generator (mulberry32) returning values in [0, 1). */
-export function seededRandom(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+/** A seeded number in [0, 1) for one cell and one stream: the same inputs always give the same number, whatever else is drawn. */
+export function cellRandom(seed: number, row: number, col: number, stream: number): number {
+  let h = Math.imul(seed ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(row + 0x1000, 0xc2b2ae35) ^ Math.imul(col + 0x100000, 0x27d4eb2f) ^ Math.imul(stream + 1, 0x165667b1);
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
 export function createSpace(options: SpaceOptions): Space {
-  const { cols, rows, fadeTop, fadeSide, starChance, clear } = options;
-  const random = seededRandom(options.seed);
-  // The grain has its own stream, so stars never move when the fade changes.
-  const grain = seededRandom(options.seed + 0x9e3779b9);
+  const { cols, rows, fadeTop, fadeBottom, starChance, clear, seed, centerCol } = options;
   const levels = new Float32Array(cols * rows);
   const glyphs: string[] = new Array(cols * rows).fill(' ');
   for (let r = 0; r < rows; r++) {
+    const rowDensity = density(r, rows, fadeTop, fadeBottom);
     for (let c = 0; c < cols; c++) {
       const i = r * cols + c;
-      levels[i] = level(density(c, r, cols, rows, fadeTop, fadeSide), grain());
-      // Draw both numbers for every cell so a star never moves when the fade or the clearing changes.
-      const roll = random();
-      const glyph = STAR_GLYPHS[Math.floor(random() * STAR_GLYPHS.length)];
+      const dc = c - centerCol;
+      // Cells are keyed by position from the center column, so a wider or narrower band keeps the same cells near the globe.
+      levels[i] = level(rowDensity, cellRandom(seed, r, dc, 0));
+      if (levels[i] < 1) continue;
       const inGlobe = Math.hypot((c + 0.5 - clear.col) / clear.rx, (r + 0.5 - clear.row) / clear.ry) <= 1;
-      if (levels[i] === 1 && !inGlobe && roll < starChance) glyphs[i] = glyph;
+      if (!inGlobe && cellRandom(seed, r, dc, 1) < starChance) glyphs[i] = STAR_GLYPHS[Math.floor(cellRandom(seed, r, dc, 2) * STAR_GLYPHS.length)];
     }
   }
   return { cols, rows, levels, glyphs };
