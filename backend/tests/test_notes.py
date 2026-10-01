@@ -166,3 +166,123 @@ def test_seed_rows_pass_note_validation():
     for lat, lon, text, _days in DEMO_NOTES:
         note = main.NoteIn(lat=lat, lon=lon, text=text)
         assert note.text == text
+
+
+# --- GET /api/notes/rotation ---
+
+
+def seed(tmp_path, notes):
+    conn = main.connect()
+    with conn:
+        conn.executemany(
+            "INSERT INTO notes (lat, lon, text, created_at) VALUES (?, ?, 'n', '2026-01-01T00:00:00+00:00')",
+            notes,
+        )
+    conn.close()
+
+
+def rotation(client, exclude=None, **kwargs):
+    params = {} if exclude is None else {"exclude": exclude}
+    if "headers" not in kwargs:
+        main._recent_rotations.clear()  # most tests call it many times; the limit has its own test
+    return client.get("/api/notes/rotation", params=params, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def clear_rotation_limits():
+    main._recent_rotations.clear()
+
+
+def test_rotation_is_empty_with_no_notes(client):
+    assert rotation(client).json() == []
+
+
+def test_rotation_returns_3_to_5_notes_with_all_fields_and_no_store(client, tmp_path):
+    seed(tmp_path, [(0, lon) for lon in range(-170, 180, 10)])
+    sizes = set()
+    for _ in range(40):
+        r = rotation(client)
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "no-store"
+        notes = r.json()
+        sizes.add(len(notes))
+        assert len({n["id"] for n in notes}) == len(notes)
+        assert set(notes[0]) == {"id", "lat", "lon", "text", "created_at"}
+    assert sizes == {3, 4, 5}
+
+
+def test_rotation_returns_fewer_when_fewer_exist(client, tmp_path):
+    seed(tmp_path, [(0, 10), (0, 100)])
+    assert len(rotation(client).json()) == 2
+
+
+def test_rotation_is_spread_across_longitude(client, tmp_path):
+    seed(tmp_path, [(0, lon) for lon in range(-179, 180, 3)])
+    for _ in range(30):
+        sectors = {int((n["lon"] + 180) // 72) for n in rotation(client).json()}
+        # One per sector, so a set of 3+ always covers at least 3 sectors.
+        assert len(sectors) >= 3
+
+
+def test_rotation_fills_up_when_sectors_are_empty(client, tmp_path):
+    seed(tmp_path, [(0, lon) for lon in range(0, 30)])
+    for _ in range(10):
+        assert len(rotation(client).json()) >= 3
+
+
+def test_rotation_skips_excluded_ids_when_enough_others_exist(client, tmp_path):
+    seed(tmp_path, [(0, lon) for lon in range(-170, 180, 10)])
+    for _ in range(30):
+        assert not {n["id"] for n in rotation(client, "1,2,3,4,5").json()} & {1, 2, 3, 4, 5}
+
+
+def test_rotation_repeats_excluded_notes_rather_than_return_too_few(client, tmp_path):
+    seed(tmp_path, [(0, 10), (0, 100), (0, -100), (0, -10)])
+    ids = {n["id"] for n in rotation(client, "1,2,3").json()}
+    assert 4 in ids and len(ids) >= 3
+
+
+@pytest.mark.parametrize("bad", ["a", "1,,2", "1,2,", "-1", "1.5", " 1", "+1", "1_0", ",".join(map(str, range(11)))])
+def test_rotation_rejects_malformed_exclude(client, bad):
+    assert rotation(client, bad).status_code == 422
+
+
+def test_rotation_accepts_empty_and_ten_excluded(client):
+    assert rotation(client, "").status_code == 200
+    assert rotation(client, ",".join(map(str, range(10)))).status_code == 200
+
+
+def test_rotation_is_rate_limited_per_client(client):
+    for _ in range(main.RATE_LIMIT_ROTATIONS):
+        assert rotation(client, headers={"X-Real-IP": "1.1.1.1"}).status_code == 200
+    r = rotation(client, headers={"X-Real-IP": "1.1.1.1"})
+    assert r.status_code == 429
+    assert int(r.headers["retry-after"]) >= 1
+    assert rotation(client, headers={"X-Real-IP": "2.2.2.2"}).status_code == 200
+    # Posting has its own budget.
+    assert post(client, headers={"X-Real-IP": "1.1.1.1"}).status_code == 201
+
+
+def test_rotation_leaves_the_other_endpoints_alone(client, tmp_path):
+    seed(tmp_path, [(0, 10), (0, 100)])
+    assert len(client.get("/api/notes").json()) == 2
+    assert post(client).status_code == 201
+
+
+def test_rotation_is_fast_with_10000_notes(client, tmp_path):
+    import random
+    import time
+
+    from fastapi import Response
+    from starlette.requests import Request
+
+    rng = random.Random(1)
+    seed(tmp_path, [(rng.uniform(-90, 90), rng.uniform(-180, 180)) for _ in range(10_000)])
+    request = Request({"type": "http", "headers": [], "client": ("1.2.3.4", 1)})
+    # Call the handler itself, so the test client's own overhead isn't counted.
+    main.notes_rotation(request, Response(), "1,2,3,4,5")  # warm up
+    start = time.perf_counter()
+    for _ in range(10):
+        main._recent_rotations.clear()
+        assert len(main.notes_rotation(request, Response(), "1,2,3,4,5")) >= 3
+    assert (time.perf_counter() - start) / 10 < 0.05
