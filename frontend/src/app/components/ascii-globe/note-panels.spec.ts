@@ -3,7 +3,9 @@ import {
   assignSlots,
   cellCenter,
   DISC_OVERLAP,
+  advancePanels,
   easeRect,
+  PanelState,
   layoutPanels,
   nearestEdgePoint,
   nearestInZone,
@@ -247,10 +249,52 @@ describe('easeRect', () => {
     expect(30 - run(at(0, 0), at(30, 0), 0.3, 60).left).toBeLessThan(2.5);
   });
 
+  it('keeps up with a target moving steadily far faster than PANEL_MAX_SPEED', () => {
+    const fps = 60;
+    const speed = 400;
+    let r = at(0, 0);
+    let target = at(0, 0);
+    let worst = 0;
+    for (let i = 0; i < fps * 3; i++) {
+      const next = at(target.left + speed / fps, 0);
+      r = easeRect(r, next, 1 / fps, PANEL_TAU, Math.hypot(next.left - target.left, 0));
+      target = next;
+      if (i > fps) worst = Math.max(worst, target.left - r.left);
+    }
+    // Easing alone trails a steady target by speed * tau; the allowance must not add to that.
+    expect(worst).toBeLessThan(speed * PANEL_TAU * 1.1);
+    // Without the allowance the cap would leave it hundreds of pixels behind.
+    let slow = at(0, 0);
+    for (let i = 0; i < fps * 3; i++) slow = easeRect(slow, at((i + 1) * (speed / fps), 0), 1 / fps);
+    expect(3 * speed - slow.left).toBeGreaterThan(300);
+  });
+
   it('never moves faster than PANEL_MAX_SPEED, however far it has to go', () => {
     const r = easeRect(at(0, 0), at(500, 500), 1 / 60);
     expect(Math.hypot(r.left, r.top)).toBeLessThanOrEqual(PANEL_MAX_SPEED / 60 + 1e-9);
     expect(PANEL_MAX_SPEED / 60).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('advancePanels', () => {
+  const rect = (left: number, top: number): Rect => ({ left, top, width: 10, height: 10 });
+  const prev = new Map<number, PanelState>([[1, { rect: rect(0, 0), target: rect(0, 0), key: 'a' }]]);
+
+  it('sits on the target with snap, and glides without it', () => {
+    expect(advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'a' }], 0.016, true).get(1)!.rect.left).toBe(100);
+    expect(advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'b' }], 0.016).get(1)!.rect.left).toBeLessThan(5);
+  });
+
+  it('lets a panel follow its target, but not jump when its spot changes', () => {
+    const follow = advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'a' }], 0.016).get(1)!.rect.left;
+    const jump = advancePanels(prev, [1], [{ rect: rect(100, 0), key: 'b' }], 0.016).get(1)!.rect.left;
+    expect(follow).toBeGreaterThan(jump);
+  });
+
+  it('only keeps the panels it is given, and starts new ones on their targets', () => {
+    const next = advancePanels(prev, [2], [{ rect: rect(7, 8), key: 'a' }], 0.016);
+    expect([...next.keys()]).toEqual([2]);
+    expect(next.get(2)!.rect).toEqual(rect(7, 8));
   });
 });
 
@@ -278,7 +322,7 @@ function simulate(box: { left: number; top: number; width: number; height: numbe
   const size = { width: 150, height: 56 };
   const disc = { x: box.left + box.width / 2, y: box.top + box.height / 2, r: Math.min(box.width, box.height) / 2 };
   let slots: Slots = [null, null, null];
-  let state = new Map<number, { rect: Rect; key: string }>();
+  let state = new Map<number, PanelState>();
   const frames: { id: number; rect: Rect; target: Rect; pin: { x: number; y: number }; first: boolean }[][] = [];
   for (let f = 0; f < fps * 30; f++) {
     const angle = (f / (fps * 30)) * 2 * Math.PI;
@@ -287,14 +331,9 @@ function simulate(box: { left: number; top: number; width: number; height: numbe
     const shown = slots.filter((n): n is Note => !!n).sort((a, b) => Number(state.has(b.id)) - Number(state.has(a.id)));
     const pins = shown.map((n) => pinPoint(project(n, angle, tilt), box));
     const targets = layoutPanels(pins, shown.map(() => size), stage, PANEL_GAP, disc, shown.map((n) => state.get(n.id)?.key));
-    const next = new Map<number, { rect: Rect; key: string }>();
+    const next = advancePanels(state, shown.map((n) => n.id), targets, 1 / fps);
     frames.push(
-      shown.map((n, i) => {
-        const prev = state.get(n.id)?.rect;
-        const rect = easeRect(prev, targets[i].rect, 1 / fps);
-        next.set(n.id, { rect, key: targets[i].key });
-        return { id: n.id, rect, target: targets[i].rect, pin: pins[i], first: !prev };
-      }),
+      shown.map((n, i) => ({ id: n.id, rect: next.get(n.id)!.rect, target: targets[i].rect, pin: pins[i], first: !state.has(n.id) })),
     );
     state = next;
   }
@@ -349,7 +388,7 @@ describe('panels over a full rotation of the demo notes', () => {
     const { frames } = simulate(box, stage);
     const crossing = frames.filter((f) => f.some(({ rect: r }, i) => f.slice(i + 1).some(({ rect: o }) => !apart(r, o))));
     // Seconds-long glides only happen when a crowd of three pins forces a panel to the far side of the globe.
-    expect(crossing.length / frames.length).toBeLessThan(0.15);
+    expect(crossing.length / frames.length).toBeLessThan(0.13);
   });
 
   it('rarely pass over their own pins while gliding', () => {
@@ -358,6 +397,14 @@ describe('panels over a full rotation of the demo notes', () => {
       f.some(({ rect: r, pin }) => pin.x >= r.left && pin.x <= r.left + r.width && pin.y >= r.top && pin.y <= r.top + r.height),
     );
     // Only when a crowd of three pins forces a panel to the far side of the globe, which takes seconds at the speed limit.
-    expect(covering.length / frames.length).toBeLessThan(0.05);
+    expect(covering.length / frames.length).toBeLessThan(0.04);
+    // And never for long at a time: no single episode of covering lasts more than a second (the longest measured is 0.67s).
+    let run = 0;
+    let longest = 0;
+    for (const f of frames) {
+      run = f.some(({ rect: r, pin }) => pin.x >= r.left && pin.x <= r.left + r.width && pin.y >= r.top && pin.y <= r.top + r.height) ? run + 1 : 0;
+      longest = Math.max(longest, run);
+    }
+    expect(longest).toBeLessThanOrEqual(60);
   });
 });

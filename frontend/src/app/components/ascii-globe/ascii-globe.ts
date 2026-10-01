@@ -10,7 +10,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { createGlobe, markerCell, project, Spot, unproject } from './globe-renderer';
-import { assignSlots, cellCenter, easeRect, layoutPanels, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, Rect, sameSlots, Slots } from './note-panels';
+import { assignSlots, cellCenter, advancePanels, layoutPanels, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 
 const COLS = 61;
@@ -48,7 +48,7 @@ export class AsciiGlobe {
   private redraw = () => {};
   private nextTempId = -1;
   /** Where each shown panel is now (eased toward its target), and which spot it took, by note id. */
-  private panelPositions = new Map<number, { rect: Rect; key: string }>();
+  private panelPositions = new Map<number, PanelState>();
   private lastPanelTime = 0;
 
   /** Where the visitor clicked, while the note form is open. */
@@ -128,13 +128,8 @@ export class AsciiGlobe {
     this.lastPanelTime = now;
     // With reduced motion, panels stay exactly on their targets instead of easing.
     const snap = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const positions = new Map<number, { rect: Rect; key: string }>();
-    const rects = items.map((item, n) => {
-      const rect = easeRect(snap ? undefined : this.panelPositions.get(item.id)?.rect, targets[n].rect, dt);
-      positions.set(item.id, { rect, key: targets[n].key });
-      return rect;
-    });
-    this.panelPositions = positions;
+    this.panelPositions = advancePanels(this.panelPositions, items.map((item) => item.id), targets, dt, snap);
+    const rects = items.map((item) => this.panelPositions.get(item.id)!.rect);
     items.forEach(({ i, end }, n) => {
       const rect = rects[n];
       const start = nearestEdgePoint(rect, end);

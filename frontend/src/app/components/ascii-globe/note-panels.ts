@@ -213,16 +213,42 @@ export function layoutPanels(
 
 /**
  * Moves a panel from where it was toward `target`, closing 1 - e^(-dt/tau) of the distance, so
- * the motion looks the same at any frame rate, but never faster than `PANEL_MAX_SPEED`. With no
- * previous position it starts at the target.
+ * the motion looks the same at any frame rate. A move to a new spot is never faster than
+ * `PANEL_MAX_SPEED`, but `allowance` (how far the target itself moved this frame) is added to
+ * that limit, so a panel can keep up with a pin that is moving fast and only a jump is slowed.
+ * With no previous position it starts at the target.
  */
-export function easeRect(previous: Rect | undefined, target: Rect, dt: number, tau = PANEL_TAU): Rect {
+export function easeRect(previous: Rect | undefined, target: Rect, dt: number, tau = PANEL_TAU, allowance = 0): Rect {
   if (!previous) return target;
   const k = 1 - Math.exp(-Math.max(0, dt) / tau);
   const dx = (target.left - previous.left) * k;
   const dy = (target.top - previous.top) * k;
-  const cap = Math.min(1, (PANEL_MAX_SPEED * Math.max(0, dt)) / (Math.hypot(dx, dy) || 1));
+  const cap = Math.min(1, (PANEL_MAX_SPEED * Math.max(0, dt) + Math.max(0, allowance)) / (Math.hypot(dx, dy) || 1));
   return { ...target, left: previous.left + dx * cap, top: previous.top + dy * cap };
+}
+
+export type PanelState = { rect: Rect; target: Rect; key: string };
+
+/**
+ * One frame of easing for every panel: each moves from where it was toward its new target
+ * (or sits on it with `snap`), and the result is the map to pass in next frame. Panels whose
+ * spot changed (a different key) get no allowance, so a change of spot is still a glide.
+ */
+export function advancePanels(
+  previous: ReadonlyMap<number, PanelState>,
+  ids: readonly number[],
+  targets: readonly { rect: Rect; key: string }[],
+  dt: number,
+  snap = false,
+): Map<number, PanelState> {
+  const next = new Map<number, PanelState>();
+  ids.forEach((id, n) => {
+    const before = previous.get(id);
+    const t = targets[n];
+    const allowance = before && before.key === t.key ? Math.hypot(t.rect.left - before.target.left, t.rect.top - before.target.top) : 0;
+    next.set(id, { rect: easeRect(snap ? undefined : before?.rect, t.rect, dt, PANEL_TAU, allowance), target: t.rect, key: t.key });
+  });
+  return next;
 }
 
 /** Where a spot at view-space (x right, y up) is, in the same pixels as `cellCenter`, but not snapped to a character cell. */
