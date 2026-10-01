@@ -11,20 +11,20 @@ import {
   viewChild,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { cellRgb, css, MARKER_CELL, NO_CELL, SPACE_COLOR, STAR_COLOR } from './globe-palette';
+import { cellRgb, css, inkColor, MARKER_CELL, NO_CELL, SPACE_COLOR, STAR_COLOR, TINT_STEPS, tintColor, tintStep } from './globe-palette';
 import { createGlobe, markerCell, project, Spot, unproject } from './globe-renderer';
 import { assignSlots, cellCenter, advancePanels, layoutLanes, LANES, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, placementRank, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 import { COAST_EPSILON, DateLineWatcher, MIN_REQUEST_GAP_MS, NoteRotation } from './note-rotation';
-import { createSpace, Space } from './space';
+import { createSpace, rampChar, Space } from './space';
 
 const COLS = 61;
 // Monospace glyphs are about 0.6 as wide as they are tall; this keeps the globe round.
 const ROWS = Math.round(COLS * 0.6);
-/** Dark space around the globe, in character cells. The top and sides dither into the white page; the bottom is a hard edge. */
-export const SPACE_PAD = { top: 6, side: 8, bottom: 2 };
-/** Cells over which the dark space dithers from white to solid. */
-export const SPACE_FADE = { top: 6, side: 8 };
+/** Dark space around the globe, in character cells. The top and sides fade into the white page; the bottom is a hard edge. */
+export const SPACE_PAD = { top: 12, side: 16, bottom: 2 };
+/** Cells over which the dark space fades from white to solid. */
+export const SPACE_FADE = { top: 12, side: 16 };
 export const SPACE_COLS = COLS + 2 * SPACE_PAD.side;
 export const SPACE_ROWS = ROWS + SPACE_PAD.top + SPACE_PAD.bottom;
 /** Fixed seed and density for the stars, so they are the same on every frame and every visit. */
@@ -220,34 +220,36 @@ export class AsciiGlobe {
     return cells;
   }
 
-  /** Draws the dark space once. It is static: the same grid and the same stars on every frame. */
+  /** Draws the dark space once. It is static: the same grid, grain and stars on every frame. */
   private drawSpace(el: HTMLElement) {
     const space = buildSpace();
+    const styles = Array.from({ length: TINT_STEPS }, (_, step) => ({
+      background: step === 0 ? '' : css(tintColor(step)),
+      color: css(step === TINT_STEPS - 1 ? STAR_COLOR : inkColor(step)),
+    }));
     const fragment = document.createDocumentFragment();
     for (let r = 0; r < space.rows; r++) {
+      // Neighboring cells on one tint step share a span.
       let run = '';
-      let runDark = false;
+      let runStep = 0;
       const flush = () => {
         if (!run) return;
-        if (runDark) {
-          const span = document.createElement('span');
-          span.style.backgroundColor = css(SPACE_COLOR);
-          span.style.color = css(STAR_COLOR);
-          span.textContent = run;
-          fragment.appendChild(span);
-        } else {
-          fragment.appendChild(document.createTextNode(run));
-        }
+        const span = document.createElement('span');
+        span.style.backgroundColor = styles[runStep].background;
+        span.style.color = styles[runStep].color;
+        span.textContent = run;
+        fragment.appendChild(span);
         run = '';
       };
       for (let c = 0; c < space.cols; c++) {
         const i = r * space.cols + c;
-        const isDark = space.dark[i] === 1;
-        if (isDark !== runDark) {
+        const level = space.levels[i];
+        const step = tintStep(level);
+        if (step !== runStep) {
           flush();
-          runDark = isDark;
+          runStep = step;
         }
-        run += isDark ? space.glyphs[i] : ' ';
+        run += level >= 1 ? space.glyphs[i] : rampChar(level);
       }
       flush();
       if (r < space.rows - 1) fragment.appendChild(document.createTextNode('\n'));

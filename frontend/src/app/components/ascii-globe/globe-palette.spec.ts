@@ -17,6 +17,12 @@ import {
   Terrain,
   TERRAIN_COLORS,
   VEGETATION_COLOR,
+  FADE_INK,
+  inkColor,
+  PAGE_COLOR,
+  TINT_STEPS,
+  tintColor,
+  tintStep,
 } from './globe-palette';
 
 export function luminance([r, g, b]: Rgb): number {
@@ -85,5 +91,45 @@ describe('palette', () => {
     expect(decodeCell(MARKER_CELL)).toBeNull();
     expect(cellRgb(MARKER_CELL)).toBe(MARKER_COLOR);
     expect(cellRgb(NO_CELL)).toBeNull();
+  });
+});
+
+describe('space tint', () => {
+  const luminance = (c: Rgb) => {
+    const [r, g, b] = c.map((v) => {
+      const x = v / 255;
+      return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+
+  it('has at least 6 steps, from the page white to exactly the space color', () => {
+    expect(TINT_STEPS).toBeGreaterThanOrEqual(6);
+    expect(tintColor(0)).toEqual(PAGE_COLOR);
+    expect(tintColor(TINT_STEPS - 1)).toEqual(SPACE_COLOR);
+  });
+
+  it('gets darker with every step', () => {
+    for (let s = 1; s < TINT_STEPS; s++) expect(luminance(tintColor(s))).toBeLessThan(luminance(tintColor(s - 1)));
+  });
+
+  it('maps level 0 to the bare page and only level 1 to solid, never going back', () => {
+    expect(tintStep(0)).toBe(0);
+    expect(tintStep(0.15)).toBe(0);
+    expect(tintStep(1)).toBe(TINT_STEPS - 1);
+    expect(tintStep(0.999)).toBeLessThan(TINT_STEPS - 1);
+    let last = 0;
+    for (let l = 0; l <= 1; l += 0.01) {
+      expect(tintStep(l)).toBeGreaterThanOrEqual(last);
+      last = tintStep(l);
+    }
+    expect(new Set([0, 0.2, 0.4, 0.6, 0.8, 1].map(tintStep)).size).toBe(6);
+  });
+
+  it('keeps the outer ink faint against white: contrast of at most 1.6:1', () => {
+    const contrast = 1.05 / (luminance(inkColor(tintStep(0.15))) + 0.05);
+    expect(contrast).toBeLessThanOrEqual(1.6);
+    expect(inkColor(0)).toEqual(FADE_INK);
+    expect(inkColor(TINT_STEPS - 1)).toEqual(STAR_COLOR);
   });
 });
