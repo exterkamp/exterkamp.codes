@@ -10,7 +10,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { createGlobe, markerCell, Spot, unproject } from './globe-renderer';
-import { assignSlots, cellCenter, nearestVisible, PANEL_COUNT, sameSlots, Slots } from './note-panels';
+import { assignSlots, cellCenter, nearestEdgePoint, nearestInZone, PANEL_COUNT, placePanels, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 
 const COLS = 61;
@@ -82,9 +82,9 @@ export class AsciiGlobe {
     });
   }
 
-  /** Picks the notes for the panels and points each panel's line at its marker. */
+  /** Picks the notes for the panels, then sets each panel beside its marker with a line between them. */
   private updatePanels(angle: number) {
-    const slots = assignSlots(this.activeSlots, nearestVisible(this.notes, angle, TILT), angle, TILT);
+    const slots = assignSlots(this.activeSlots, nearestInZone(this.notes, angle, TILT, this.activeSlots));
     if (!sameSlots(slots, this.activeSlots)) {
       this.activeSlots = slots;
       this.slots.set(slots);
@@ -102,14 +102,24 @@ export class AsciiGlobe {
     };
     const panels = stage.querySelectorAll<HTMLElement>('.panel');
     const links = stage.querySelectorAll<SVGGElement>('.link');
-    slots.forEach((note, i) => {
-      const cell = note && markerCell(note, angle, TILT, COLS, ROWS);
-      if (!cell) return;
-      const end = cellCenter(cell, COLS, ROWS, box);
-      const panel = panels[i].getBoundingClientRect();
+    // Active panels first, so a fading one never pushes a live one aside. Panels fading out
+    // keep following their dot until they are gone.
+    const items = this.shown()
+      .map((note, i) => ({ i, active: !!slots[i], end: note && markerCell(note, angle, TILT, COLS, ROWS) }))
+      .flatMap((item) => (item.end ? [{ ...item, end: cellCenter(item.end, COLS, ROWS, box) }] : []))
+      .sort((a, b) => Number(b.active) - Number(a.active));
+    const rects = placePanels(
+      items.map((item) => item.end),
+      items.map((item) => ({ width: panels[item.i].offsetWidth, height: panels[item.i].offsetHeight })),
+      { width: stageRect.width, height: stageRect.height },
+    );
+    items.forEach(({ i, end }, n) => {
+      const rect = rects[n];
+      const start = nearestEdgePoint(rect, end);
+      panels[i].style.transform = `translate(${rect.left}px, ${rect.top}px)`;
       const [line, dot] = [links[i].firstElementChild!, links[i].lastElementChild!];
-      line.setAttribute('x1', String(panel.left - stageRect.left + panel.width / 2));
-      line.setAttribute('y1', String(panel.bottom - stageRect.top));
+      line.setAttribute('x1', String(start.x));
+      line.setAttribute('y1', String(start.y));
       line.setAttribute('x2', String(end.x));
       line.setAttribute('y2', String(end.y));
       dot.setAttribute('cx', String(end.x));

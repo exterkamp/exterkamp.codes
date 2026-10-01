@@ -233,6 +233,19 @@ describe('AsciiGlobe', () => {
       expect(panelTexts().sort()).toEqual(['a bit left', 'dead center', 'off to the side']);
     });
 
+    it('shows no panel for a visible note outside the front quarter, but keeps its dot', async () => {
+      await setup([note(1, 23.4, 0, 'dead center'), note(2, 23.4, 75, 'near the edge')]);
+      expect(markerCount()).toBe(2);
+      expect(panelTexts()).toEqual(['dead center']);
+    });
+
+    it('places an active panel beside its marker, inside the stage', async () => {
+      await setup([note(1, 23.4, 0, 'dead center')]);
+      const panel: HTMLElement = el('.panel.active');
+      expect(panel.style.transform).toMatch(/^translate\(/);
+      expect(getComputedStyle(el('.panels')).pointerEvents).toBe('none');
+    });
+
     it('draws a line from each active panel to the center of its marker cell', async () => {
       await setup([note(1, 23.4, 0, 'dead center')]);
       const line: SVGLineElement = el('.link.active line');
