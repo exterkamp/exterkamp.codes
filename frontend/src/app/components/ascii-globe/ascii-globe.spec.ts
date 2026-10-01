@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { AsciiGlobe } from './ascii-globe';
 
@@ -79,6 +80,83 @@ describe('AsciiGlobe', () => {
       fire('pointerdown');
       fire('blur', { target: window });
       expect(pre.classList).not.toContain('dragging');
+    });
+  });
+
+  describe('momentum', () => {
+    let pre: HTMLPreElement;
+    let now: number;
+    // Angular schedules its own frames too, so keep every pending callback.
+    let frames: FrameRequestCallback[] = [];
+    const fire = (type: string, init: PointerEventInit = {}) =>
+      pre.dispatchEvent(new PointerEvent(type, { pointerId: 1, bubbles: true, buttons: 1, ...init }));
+    /** Advance fake time by `ms` in 16ms frames, running the animation loop. */
+    const run = (ms: number) => {
+      for (let t = 0; t < ms; t += 16) {
+        now += 16;
+        const pending = frames;
+        frames = [];
+        pending.forEach((cb) => cb(now));
+      }
+    };
+    /** Drag `dx` px in 5 moves `stepMs` apart, wait `restMs`, then release. Then coast for `coastMs`. */
+    const dragAndRelease = (dx: number, stepMs: number, restMs: number, coastMs: number) => {
+      fire('pointerdown', { clientX: 0 });
+      for (let i = 1; i <= 5; i++) {
+        run(stepMs);
+        fire('pointermove', { clientX: (dx * i) / 5 });
+      }
+      run(restMs);
+      fire('pointerup');
+      run(coastMs);
+      return pre.textContent;
+    };
+
+    /** A fresh globe at angle 0, with fake time and animation frames. */
+    const setup = async () => {
+      now = 1000;
+      frames = [];
+      const fixture = TestBed.createComponent(AsciiGlobe);
+      await fixture.whenStable();
+      pre = fixture.nativeElement.querySelector('pre');
+      // jsdom has no layout; give the globe a 300px width so 150px is one radian.
+      pre.getBoundingClientRect = () => ({ width: 300 }) as DOMRect;
+    };
+
+    beforeEach(() => {
+      vi.spyOn(performance, 'now').mockImplementation(() => now);
+      vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb));
+      vi.stubGlobal('cancelAnimationFrame', () => {});
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
+    // Same distance dragged, so any difference afterwards is down to release velocity.
+    it('coasts after a fast flick instead of snapping back to the auto-spin', async () => {
+      await setup();
+      const fast = dragAndRelease(-150, 16, 0, 320);
+      TestBed.resetTestingModule();
+      await setup();
+      const slow = dragAndRelease(-150, 160, 0, 320);
+      expect(fast).not.toBe(slow);
+    });
+
+    it('does not carry momentum if the pointer rested before release', async () => {
+      await setup();
+      const fastThenRest = dragAndRelease(-150, 16, 496, 320);
+      TestBed.resetTestingModule();
+      await setup();
+      const slowThenRest = dragAndRelease(-150, 160, 496, 320);
+      expect(fastThenRest).toBe(slowThenRest);
     });
   });
 });

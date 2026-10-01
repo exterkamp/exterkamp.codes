@@ -8,6 +8,12 @@ const TILT = (23.4 * Math.PI) / 180;
 const LIGHT = [-0.5, 0.4, 0.8] as const;
 /** Radians per second: one full turn every ~30s. */
 const SPIN_SPEED = (2 * Math.PI) / 30;
+/** Seconds for a flick's extra speed to fall by a factor of e on the way back to SPIN_SPEED. */
+const MOMENTUM_DECAY = 1;
+/** Seconds over which drag speed is smoothed; also how long a pause before release kills a flick. */
+const VELOCITY_SMOOTHING = 0.1;
+/** Cap on flick speed (radians per second) so a jumpy pointer can't make it unreadably fast. */
+const MAX_SPEED = 4 * Math.PI;
 
 @Component({
   selector: 'app-ascii-globe',
@@ -30,6 +36,10 @@ export class AsciiGlobe {
       let dragPointer: number | undefined;
       let dragX = 0;
       let dragRadius = 1;
+      let dragTime = 0;
+      // Radians per second. Smoothed from the pointer while dragging; after release it
+      // decays back toward SPIN_SPEED so a flick coasts instead of snapping back.
+      let velocity = SPIN_SPEED;
       draw();
 
       // Dragging turns the globe so the surface under the cursor follows it:
@@ -42,6 +52,8 @@ export class AsciiGlobe {
         dragPointer = e.pointerId;
         dragX = e.clientX;
         dragRadius = Math.max(1, el.getBoundingClientRect().width / 2);
+        dragTime = performance.now();
+        velocity = 0;
         try {
           el.setPointerCapture(e.pointerId);
         } catch {
@@ -54,11 +66,22 @@ export class AsciiGlobe {
         // Self-heal: if no button is held, we missed the release (lost focus,
         // context menu, released over another window), so end the drag now.
         if (e.buttons === 0) return endDrag();
-        angle += (e.clientX - dragX) / dragRadius;
+        const now = performance.now();
+        const delta = (e.clientX - dragX) / dragRadius;
+        angle += delta;
+        const dt = (now - dragTime) / 1000;
+        if (dt > 0) {
+          const alpha = 1 - Math.exp(-dt / VELOCITY_SMOOTHING);
+          velocity += (delta / dt - velocity) * alpha;
+          velocity = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, velocity));
+          dragTime = now;
+        }
         dragX = e.clientX;
         draw();
       };
       const endDrag = () => {
+        // Holding still before letting go is not a flick.
+        if (dragging && performance.now() - dragTime > VELOCITY_SMOOTHING * 1000) velocity = 0;
         dragging = false;
         dragPointer = undefined;
         el.classList.remove('dragging');
@@ -91,7 +114,8 @@ export class AsciiGlobe {
         const dt = Math.min(now - last, 100) / 1000;
         last = now;
         if (!dragging) {
-          angle += dt * SPIN_SPEED;
+          velocity = SPIN_SPEED + (velocity - SPIN_SPEED) * Math.exp(-dt / MOMENTUM_DECAY);
+          angle += dt * velocity;
           draw();
         }
         frame = requestAnimationFrame(tick);
