@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assignSlots,
   cellCenter,
+  DISC_OVERLAP,
   nearestEdgePoint,
   nearestInZone,
   placePanels,
@@ -130,6 +131,37 @@ describe('placePanels on a narrow stage', () => {
         expect(a.top + a.height <= b.top || b.top + b.height <= a.top || a.left + a.width <= b.left || b.left + b.width <= a.left).toBe(true);
       }
     }
+  });
+});
+
+describe('placePanels around the globe', () => {
+  const size = { width: 100, height: 40 };
+  const bounds = { width: 600, height: 400 };
+  const disc = { x: 300, y: 200, r: 150 };
+
+  it('puts a panel outside the globe, or barely over it', () => {
+    for (const m of [{ x: 300, y: 200 }, { x: 250, y: 150 }, { x: 380, y: 230 }, { x: 330, y: 120 }]) {
+      const [r] = placePanels([m], [size], bounds, 14, disc);
+      const cx = Math.max(r.left, Math.min(disc.x, r.left + r.width));
+      const cy = Math.max(r.top, Math.min(disc.y, r.top + r.height));
+      expect(disc.r - Math.hypot(cx - disc.x, cy - disc.y)).toBeLessThanOrEqual(DISC_OVERLAP + 0.5);
+    }
+  });
+
+  it('keeps one panel off the marker and line of another', () => {
+    const markers = [{ x: 330, y: 200 }, { x: 345, y: 215 }, { x: 320, y: 185 }];
+    const rects = placePanels(markers, [size, size, size], bounds, 14, disc);
+    rects.forEach((r, i) => {
+      markers.forEach((m, j) => {
+        if (i === j) return;
+        const from = nearestEdgePoint(rects[j], m);
+        const hit = Array.from({ length: 17 }, (_, t) => ({
+          x: from.x + ((m.x - from.x) * t) / 16,
+          y: from.y + ((m.y - from.y) * t) / 16,
+        })).some((p) => p.x >= r.left && p.x <= r.left + r.width && p.y >= r.top && p.y <= r.top + r.height);
+        expect(hit).toBe(false);
+      });
+    });
   });
 });
 

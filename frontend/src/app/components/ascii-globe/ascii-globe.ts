@@ -10,7 +10,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { createGlobe, markerCell, Spot, unproject } from './globe-renderer';
-import { assignSlots, cellCenter, nearestEdgePoint, nearestInZone, PANEL_COUNT, placePanels, sameSlots, Slots } from './note-panels';
+import { assignSlots, cellCenter, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, placePanels, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 
 const COLS = 61;
@@ -112,6 +112,8 @@ export class AsciiGlobe {
       items.map((item) => item.end),
       items.map((item) => ({ width: panels[item.i].offsetWidth, height: panels[item.i].offsetHeight })),
       { width: stageRect.width, height: stageRect.height },
+      PANEL_GAP,
+      { x: box.left + box.width / 2, y: box.top + box.height / 2, r: Math.min(box.width, box.height) / 2 },
     );
     items.forEach(({ i, end }, n) => {
       const rect = rects[n];
