@@ -78,13 +78,28 @@ const intrusion = (rect: Rect, disc: Disc) => {
 const inside = (rect: Rect, p: { x: number; y: number }, pad = 0) =>
   p.x >= rect.left - pad && p.x <= rect.left + rect.width + pad && p.y >= rect.top - pad && p.y <= rect.top + rect.height + pad;
 
-/** How many of a few sample points along the segment a-b fall inside the rectangle. */
-const segmentHits = (rect: Rect, a: { x: number; y: number }, b: { x: number; y: number }) => {
-  let hits = 0;
-  for (let t = 0; t <= 16; t++) {
-    if (inside(rect, { x: a.x + ((b.x - a.x) * t) / 16, y: a.y + ((b.y - a.y) * t) / 16 }, 1)) hits++;
+/** Whether the segment a-b touches the rectangle (grown by `pad`), by clipping it against the four sides. */
+const segmentHits = (rect: Rect, a: { x: number; y: number }, b: { x: number; y: number }, pad = 1) => {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  let t0 = 0;
+  let t1 = 1;
+  const edges: [number, number][] = [
+    [-dx, a.x - (rect.left - pad)],
+    [dx, rect.left + rect.width + pad - a.x],
+    [-dy, a.y - (rect.top - pad)],
+    [dy, rect.top + rect.height + pad - a.y],
+  ];
+  for (const [p, q] of edges) {
+    if (p === 0) {
+      if (q < 0) return false;
+    } else if (p < 0) {
+      t0 = Math.max(t0, q / p);
+    } else {
+      t1 = Math.min(t1, q / p);
+    }
   }
-  return hits;
+  return t0 <= t1;
 };
 
 /**
@@ -138,14 +153,16 @@ export function placePanels(
       };
       const line = { from: nearestEdgePoint(rect, m), to: m };
       let cost = 0;
+      // No panel may sit on any other note's marker, placed yet or not.
+      markers.forEach((other, j) => {
+        if (j !== i && inside(rect, other, 2)) cost += 1e5;
+      });
       placed.forEach((p, j) => {
         const area = overlap(rect, p);
         if (area > 0) cost += 1e5 + area * 10;
-        // Neither panel may sit on the other's marker or line.
-        if (inside(rect, markers[j], 2)) cost += 1e5;
-        cost += segmentHits(rect, lines[j].from, lines[j].to) * 1e3;
-        if (inside(p, m, 2)) cost += 1e5;
-        cost += segmentHits(p, line.from, line.to) * 1e3;
+        // Neither panel may sit on the other's line, or on the other's marker.
+        if (segmentHits(rect, lines[j].from, lines[j].to)) cost += 1e4;
+        if (segmentHits(p, line.from, line.to)) cost += 1e4;
       });
       if (inside(rect, m)) cost += 1e6;
       if (disc) cost += Math.max(0, intrusion(rect, disc) - DISC_OVERLAP) * 50 + intrusion(rect, disc) * 2;

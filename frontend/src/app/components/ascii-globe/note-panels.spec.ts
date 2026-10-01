@@ -134,6 +134,25 @@ describe('placePanels on a narrow stage', () => {
   });
 });
 
+describe('placePanels with markers in a row', () => {
+  const size = { width: 100, height: 30 };
+  const bounds = { width: 400, height: 300 };
+  const coversAny = (markers: { x: number; y: number }[]) => {
+    const rects = placePanels(markers, markers.map(() => size), bounds);
+    return rects.some((r, i) =>
+      markers.some((m, j) => i !== j && m.x >= r.left && m.x <= r.left + r.width && m.y >= r.top && m.y <= r.top + r.height),
+    );
+  };
+
+  it('never puts a panel on a later marker', () => {
+    expect(coversAny([{ x: 100, y: 100 }, { x: 150, y: 100 }])).toBe(false);
+  });
+
+  it('never puts a panel on any marker of three in a row', () => {
+    expect(coversAny([{ x: 100, y: 100 }, { x: 150, y: 100 }, { x: 200, y: 100 }])).toBe(false);
+  });
+});
+
 describe('placePanels in a tight stage', () => {
   it('moves above or below rather than cover its own marker when both sides are clamped onto it', () => {
     const m = { x: 100, y: 150 };
