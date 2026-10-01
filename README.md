@@ -47,6 +47,13 @@ Notes are stored in SQLite at `/data/notes.db`; set `NOTES_DB` to put it elsewhe
 (e.g. `NOTES_DB=./notes.db`). In Docker it lives on the `notes-data` volume. Backend tests:
 `pip install -r requirements-dev.txt && python -m pytest`.
 
+To start with about 30 made-up demo notes around the world, set `SEED_DEMO_NOTES=1`
+(`SEED_DEMO_NOTES=1 NOTES_DB=./notes.db uvicorn app.main:app`). They are inserted at
+startup, directly (so the posting rate limit doesn't apply), and only when the notes
+table is empty, so restarts don't duplicate them and an existing database is left alone.
+The Docker dev stack sets it; the production compose file does not. To reset, delete the
+database file, or run `docker compose -p exterkamp-codes-site-dev down -v` for the dev stack.
+
 Frontend (requires Node 22.22+/24.15+ — use `nvm use 24`):
 
 ```bash

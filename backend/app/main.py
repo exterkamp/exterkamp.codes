@@ -2,11 +2,13 @@ import os
 import sqlite3
 import time
 from collections import defaultdict, deque
-from contextlib import closing
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager, closing
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+
+from .demo_notes import DEMO_NOTES
 
 MAX_NOTE_LENGTH = 140
 # Newest notes win if the table ever outgrows what one response should carry.
@@ -14,8 +16,6 @@ MAX_NOTES_RETURNED = 500
 # Per-client posting limit: RATE_LIMIT_POSTS notes per RATE_LIMIT_WINDOW seconds.
 RATE_LIMIT_POSTS = 5
 RATE_LIMIT_WINDOW = 60.0
-
-app = FastAPI()
 
 
 def db_path() -> str:
@@ -63,6 +63,35 @@ class Note(BaseModel):
     lon: float
     text: str
     created_at: str
+
+
+def seed_demo_notes() -> None:
+    """Insert the demo notes if SEED_DEMO_NOTES=1 and the table is empty."""
+    if os.environ.get("SEED_DEMO_NOTES") != "1":
+        return
+    now = datetime.now(timezone.utc)
+    with closing(connect()) as conn, conn:
+        # Take the write lock before checking, so two workers can't both see an empty table.
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM notes LIMIT 1").fetchone():
+            return
+        conn.executemany(
+            "INSERT INTO notes (lat, lon, text, created_at) VALUES (?, ?, ?, ?)",
+            [
+                (lat, lon, text, (now - timedelta(days=days)).isoformat(timespec="seconds"))
+                # Oldest first, so ids (and /api/notes order) follow created_at like real posts.
+                for lat, lon, text, days in sorted(DEMO_NOTES, key=lambda n: -n[3])
+            ],
+        )
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    seed_demo_notes()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 # Recent post times per client, in memory only. Client addresses are used as keys
