@@ -94,7 +94,33 @@ describe('AsciiGlobe', () => {
       // Top fade, then the headline's rows, then the globe, then the bottom fade: the band grew by the headline only.
       const space = buildSpace(200);
       expect(space.rows - SPACE_FADE.top - SPACE_FADE.bottom - HEADLINE_ROWS).toBe(37);
-      expect(Math.floor(space.rows - SPACE_FADE.bottom - 37)).toBe(SPACE_FADE.top + HEADLINE_ROWS);
+    });
+
+    // The test DOM has no layout, so read the stylesheet's em lengths: the stage is the 1em row unit,
+    // the headline's font-size is a multiple of it, and its height is a multiple of its own font-size.
+    it('is exactly HEADLINE_ROWS stage rows tall, whatever its text does', async () => {
+      const { h } = await setup();
+      const style = getComputedStyle(h);
+      expect(style.height).toMatch(/em$/);
+      expect(style.fontSize).toMatch(/em$/);
+      expect(parseFloat(style.height) * parseFloat(style.fontSize)).toBeCloseTo(HEADLINE_ROWS, 5);
+      // A fixed height with a border box: wrapped text can't make it grow.
+      expect(style.boxSizing).toBe('border-box');
+    });
+
+    it('sits after the top fade rows the stage reserves above it', async () => {
+      const { root } = await setup();
+      const stage = root.querySelector('.stage') as HTMLElement;
+      expect(parseFloat(getComputedStyle(stage).paddingTop)).toBe(SPACE_FADE.top);
+      expect(getComputedStyle(stage).paddingTop).toMatch(/em$/);
+    });
+
+    it('keeps the space\'s constellations out of the headline rows', () => {
+      const { constellations } = buildSpace(spaceCols(1440, 7.2));
+      expect(constellations.length).toBeGreaterThan(0);
+      const rows = constellations.flatMap((f) => [...f.stars, ...f.lines].map((c) => c.row));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const r of rows) expect(r < SPACE_FADE.top || r >= SPACE_FADE.top + HEADLINE_ROWS).toBe(true);
     });
   });
 
