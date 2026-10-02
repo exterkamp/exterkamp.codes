@@ -1,4 +1,4 @@
-import { GLITTER_SECONDS, MAX_ANIMATED, TWINKLE_SECONDS, cellRandom, createSpace, density, level, NOISE_AMPLITUDE, RAMP, rampChar, SpaceOptions, STAR_GLYPHS } from './space';
+import { MAX_ANIMATED, TWINKLE_SHARE, TWINKLE_SECONDS, cellRandom, createSpace, density, level, NOISE_AMPLITUDE, RAMP, rampChar, SpaceOptions, STAR_GLYPHS } from './space';
 
 const options: SpaceOptions = {
   cols: 60,
@@ -175,7 +175,7 @@ describe('space stars', () => {
 
 describe('star motion', () => {
   const big: SpaceOptions = { ...options, cols: 267, rows: 61, fadeTop: 12, fadeBottom: 12, centerCol: 133, starChance: 0.035, clear: { col: 133.5, row: 30.5, rx: 30.5, ry: 18.5 } };
-  const motion = (space: ReturnType<typeof createSpace>) => space.marks.filter((m) => m.kind === 'twinkle' || m.kind === 'glitter');
+  const motion = (space: ReturnType<typeof createSpace>) => space.marks.filter((m) => m.kind === 'twinkle');
 
   it('is the same on every build, and the same cell keeps its motion when the band is resized', () => {
     const a = createSpace(big);
@@ -189,26 +189,19 @@ describe('star motion', () => {
     for (const m of shared) expect(wide.get(key(m, 100))).toEqual({ ...m, col: wide.get(key(m, 100))!.col });
   });
 
-  it('moves about 15% of the stars as twinkles and about 3% as glitters', () => {
-    const space = createSpace({ ...big, starChance: 0.2 });
-    const twinkles = space.marks.filter((m) => m.kind === 'twinkle').length;
-    const glitters = space.marks.filter((m) => m.kind === 'glitter').length;
+  it('moves almost all of the stars as twinkles', () => {
     const normal = createSpace(big);
     const normalStars = normal.glyphs.filter((g) => g !== ' ').length - normal.marks.filter((m) => m.kind.startsWith('constellation')).length;
-    const n = (k: string) => normal.marks.filter((m) => m.kind === k).length;
-    expect(n('twinkle') / normalStars).toBeGreaterThan(0.1);
-    expect(n('twinkle') / normalStars).toBeLessThan(0.2);
-    expect(n('glitter') / normalStars).toBeGreaterThan(0.01);
-    expect(n('glitter') / normalStars).toBeLessThan(0.06);
-    expect(twinkles + glitters).toBeLessThanOrEqual(MAX_ANIMATED);
+    expect(motion(normal).length / normalStars).toBeGreaterThan(0.8);
+    expect(TWINKLE_SHARE).toBeGreaterThanOrEqual(0.8);
+    expect(motion(normal).length).toBeLessThanOrEqual(MAX_ANIMATED);
   });
 
-  it('gives twinkles 3 to 9 seconds, glitters 6 to 14, and a start offset inside the cycle', () => {
+  it('gives twinkles 3 to 9 seconds and a start offset inside the cycle', () => {
     const space = createSpace(big);
     for (const m of motion(space)) {
-      const range = m.kind === 'twinkle' ? TWINKLE_SECONDS : GLITTER_SECONDS;
-      expect(m.duration!).toBeGreaterThanOrEqual(range.min);
-      expect(m.duration!).toBeLessThanOrEqual(range.max);
+      expect(m.duration!).toBeGreaterThanOrEqual(TWINKLE_SECONDS.min);
+      expect(m.duration!).toBeLessThanOrEqual(TWINKLE_SECONDS.max);
       expect(m.delay!).toBeGreaterThanOrEqual(0);
       expect(m.delay!).toBeLessThan(m.duration!);
       expect(STAR_GLYPHS.includes(m.char)).toBe(true);

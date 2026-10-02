@@ -24,10 +24,10 @@ export interface SpaceMark {
   row: number;
   col: number;
   char: string;
-  kind: 'twinkle' | 'glitter' | 'constellation-star' | 'constellation-line';
-  /** Seconds one animation cycle lasts (twinkle and glitter only). */
+  kind: 'twinkle' | 'constellation-star' | 'constellation-line';
+  /** Seconds one animation cycle lasts (twinkle only). */
   duration?: number;
-  /** Seconds into the cycle where this star starts, so no two share a rhythm (twinkle and glitter only). */
+  /** Seconds into the cycle where this star starts, so no two share a rhythm (twinkle only). */
   delay?: number;
 }
 
@@ -44,16 +44,15 @@ export interface Space {
   constellations: PlacedConstellation[];
 }
 
-/** Share of stars that twinkle, and that glitter. The rest stay still. */
-export const TWINKLE_SHARE = 0.15;
-export const GLITTER_SHARE = 0.03;
-/** Seconds one cycle lasts: a twinkle fades dim and bright over it, a glitter flashes once in it. */
+/** Share of stars that twinkle: nearly all. The rest stay still. */
+export const TWINKLE_SHARE = 0.9;
+/** Seconds one cycle lasts: a twinkle steps up through the glyphs and back down over it. */
 export const TWINKLE_SECONDS = { min: 3, max: 9 };
-export const GLITTER_SECONDS = { min: 6, max: 14 };
 /** Most elements that animate at once. */
-export const MAX_ANIMATED = 200;
+export const MAX_ANIMATED = 400;
 
-export const STAR_GLYPHS = ".'*+";
+/** Star glyphs from faint to bright. A twinkling star steps up and down this list (the keyframes in the stylesheet hold the same list). */
+export const STAR_GLYPHS = '·✻✽✶✳✢';
 
 /** Characters from faint to dense. The fade is drawn with these, denser ones at higher levels. */
 export const RAMP = '.,:;+*#%';
@@ -104,9 +103,9 @@ export function createSpace(options: SpaceOptions): Space {
       if (glyphs[i] === ' ' || r < fadeTop || r >= rows - fadeBottom) continue;
       // Which stars move, and how, comes from the cell's own hash, so it is the same on every load and at every width.
       const pick = cellRandom(seed, r, dc, 3);
-      const kind = pick < TWINKLE_SHARE ? 'twinkle' : pick < TWINKLE_SHARE + GLITTER_SHARE ? 'glitter' : null;
-      if (!kind) continue;
-      const range = kind === 'twinkle' ? TWINKLE_SECONDS : GLITTER_SECONDS;
+      if (pick >= TWINKLE_SHARE) continue;
+      const kind = 'twinkle' as const;
+      const range = TWINKLE_SECONDS;
       const duration = range.min + cellRandom(seed, r, dc, 4) * (range.max - range.min);
       moving.push({ rank: cellRandom(seed, r, dc, 6), mark: { row: r, col: c, char: glyphs[i], kind, duration, delay: cellRandom(seed, r, dc, 5) * duration } });
     }

@@ -236,8 +236,8 @@ export class AsciiGlobe {
   /**
    * Draws the dark space as a band as wide as the page. It is built once: the same grain and stars on every frame, so it
    * is only rebuilt when the page width changes. The top and bottom fades are spans per run of cells; the solid middle
-   * is one element with a CSS background, holding the stars as text. Stars that twinkle or glitter and the constellations
-   * are spans in it; CSS animates them (opacity and transform only), so the script does nothing per frame.
+   * is one element with a CSS background, holding the stars as text. Stars that twinkle and the constellations
+   * are spans in it; CSS animates them (the character only), so the script does nothing per frame.
    */
   private drawSpace(el: HTMLElement) {
     const width = this.viewportWidth();
@@ -297,7 +297,7 @@ export class AsciiGlobe {
     solid.style.setProperty('--constellation-star', css(CONSTELLATION_STAR_COLOR));
     solid.style.setProperty('--constellation-line', css(CONSTELLATION_LINE_COLOR));
     // Plain text, except the few cells that animate or belong to a constellation: each of those is a span that CSS animates.
-    const classes = { twinkle: 'twinkle', glitter: 'glitter', 'constellation-star': 'constellation-star', 'constellation-line': 'constellation-line' };
+    const classes = { twinkle: 'twinkle', 'constellation-star': 'constellation-star', 'constellation-line': 'constellation-line' };
     let mark = 0;
     for (let r = SPACE_FADE.top; r < space.rows - SPACE_FADE.bottom; r++) {
       let from = 0;
@@ -309,6 +309,8 @@ export class AsciiGlobe {
         span.className = classes[m.kind];
         if (m.duration !== undefined) span.style.cssText = `--dur:${m.duration.toFixed(2)}s;--delay:${m.delay!.toFixed(2)}s`;
         span.textContent = m.char;
+        // A twinkling star's text is hidden: CSS draws its glyph (content), stepping it through the star glyphs from this one.
+        if (m.kind === 'twinkle') span.dataset['char'] = m.char;
         solid.appendChild(span);
         from = m.col + 1;
       }

@@ -5,7 +5,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { AsciiGlobe, buildSpace, RESIZE_DEBOUNCE_MS, SPACE_FADE, SPACE_ROWS, spaceCols } from './ascii-globe';
 import { CONSTELLATION_LINE_COLOR, CONSTELLATION_STAR_COLOR, css, SPACE_COLOR, STAR_COLOR } from './globe-palette';
 import { MARKER, unproject } from './globe-renderer';
-import { MAX_ANIMATED, RAMP } from './space';
+import { MAX_ANIMATED, RAMP, STAR_GLYPHS } from './space';
 import { Note } from './notes.service';
 
 const configure = () =>
@@ -796,28 +796,33 @@ describe('AsciiGlobe', () => {
       return '';
     };
 
-    it('animates only opacity and transform', async () => {
+    it('animates only the character of a star, never its size or position', async () => {
       const fixture = TestBed.createComponent(AsciiGlobe);
       await fixture.whenStable();
       const css = styleText();
       const names = [...css.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => ({ name: m[1], at: m.index! }));
-      expect(names.map((n) => n.name.replace(/^.*star-/, 'star-')).sort()).toEqual(['star-glitter', 'star-twinkle']);
-      for (const { at } of names) {
-        const props = [...block(css, at).matchAll(/([\w-]+)\s*:/g)].map((m) => m[1]);
-        expect(props.length).toBeGreaterThan(0);
-        for (const prop of props) expect(['opacity', 'transform']).toContain(prop);
-      }
+      expect(names.map((n) => n.name.replace(/^.*star-/, 'star-'))).toEqual(['star-twinkle']);
+      const body = block(css, names[0].at);
+      const props = [...body.matchAll(/([\w-]+)\s*:\s*['"]/g)].map((m) => m[1]);
+      expect(props.length).toBeGreaterThan(0);
+      for (const prop of props) expect(prop).toBe('content');
+      expect(body).not.toMatch(/transform|scale|font-size/);
+      // It steps through every glyph from faint to bright and back, and the glyphs are the ones in STAR_GLYPHS.
+      // The stylesheet compiler may write a glyph as a CSS escape such as "\273b".
+      const seen = [...body.matchAll(/content:\s*(['"])(?:\\([0-9a-f]+)|(.))\1/g)].map((m) => (m[2] ? String.fromCodePoint(parseInt(m[2], 16)) : m[3]));
+      expect(new Set(seen)).toEqual(new Set(STAR_GLYPHS));
     });
 
     it('draws the stars and constellations as spans, with seeded durations, and keeps them under the animation cap', async () => {
       const fixture = TestBed.createComponent(AsciiGlobe);
       await fixture.whenStable();
       const space: HTMLElement = fixture.nativeElement.querySelector('.space');
-      const moving = [...space.querySelectorAll<HTMLElement>('.twinkle, .glitter')];
+      const moving = [...space.querySelectorAll<HTMLElement>('.twinkle')];
       expect(moving.length).toBeLessThanOrEqual(MAX_ANIMATED);
       for (const el of moving) {
         expect(el.style.getPropertyValue('--dur')).toMatch(/^\d+(\.\d+)?s$/);
         expect(el.style.getPropertyValue('--delay')).toMatch(/^\d+(\.\d+)?s$/);
+        expect(STAR_GLYPHS).toContain(el.dataset['char']);
       }
       expect(getComputedStyle(space).pointerEvents).toBe('none');
       expect(space.querySelectorAll('*').length).toBeLessThan(8000);
@@ -840,7 +845,7 @@ describe('AsciiGlobe', () => {
       const media = css.indexOf('@media (prefers-reduced-motion: reduce)');
       expect(media).toBeGreaterThan(-1);
       const rules = block(css, media);
-      expect(rules).toMatch(/\.space[^{]*\*\s*\{\s*animation:\s*none\s*!important/);
+      expect(rules).toMatch(/\.space[^{]*\*::before\s*\{\s*animation:\s*none\s*!important/);
       // Nothing is removed from the page: the stars are drawn either way.
       const space: HTMLElement = fixture.nativeElement.querySelector('.space');
       expect(space.querySelectorAll('.twinkle').length).toBeGreaterThan(0);
@@ -873,7 +878,7 @@ describe('AsciiGlobe', () => {
       const fixture = TestBed.createComponent(AsciiGlobe);
       await fixture.whenStable();
       const css = styleText();
-      const at = css.search(/\.space\.paused[^{]*\*\s*\{/);
+      const at = css.search(/\.space\.paused[^{]*\*::before\s*\{/);
       expect(at).toBeGreaterThan(-1);
       expect(block(css, at)).toMatch(/animation-play-state:\s*paused/);
     });
