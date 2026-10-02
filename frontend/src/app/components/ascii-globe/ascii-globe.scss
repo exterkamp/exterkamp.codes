@@ -36,6 +36,72 @@
   pointer-events: none;
 }
 
+// Stars that twinkle or glitter, and the constellations, are spans made by script in the interior. Animations only
+// change opacity and transform, which the browser can run off the main thread. Each star has its own --dur and --delay.
+.space ::ng-deep {
+  .twinkle,
+  .glitter {
+    display: inline-block;
+    animation-duration: var(--dur);
+    animation-delay: calc(-1 * var(--delay));
+    animation-iteration-count: infinite;
+  }
+
+  .twinkle {
+    animation-name: star-twinkle;
+    animation-timing-function: ease-in-out;
+  }
+
+  .glitter {
+    animation-name: star-glitter;
+    animation-timing-function: ease-in-out;
+  }
+
+  .constellation-star {
+    color: var(--constellation-star);
+  }
+
+  .constellation-line {
+    color: var(--constellation-line);
+  }
+}
+
+@keyframes star-twinkle {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+// Dim for most of the cycle, then one flash: brighter and a little larger, for well under a second.
+@keyframes star-glitter {
+  0%,
+  94%,
+  100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  97% {
+    opacity: 1;
+    transform: scale(1.7);
+  }
+}
+
+// Off screen, the animations pause.
+.space.paused ::ng-deep * {
+  animation-play-state: paused;
+}
+
+// Reduced motion: the stars and constellations stay drawn, but nothing moves.
+@media (prefers-reduced-motion: reduce) {
+  .space ::ng-deep * {
+    animation: none !important;
+  }
+}
+
 // Panels are moved next to their dots in script, every frame; they never take clicks or drags.
 .panels {
   position: absolute;

@@ -27,6 +27,10 @@ export const MARKER_COLOR: Rgb = [241, 16, 16];
 export const SPACE_COLOR: Rgb = [8, 10, 24];
 /** Stars on the dark space. */
 export const STAR_COLOR: Rgb = [214, 220, 238];
+/** The brighter stars of a constellation: dimmer than ordinary stars, so the figures stay in the background. */
+export const CONSTELLATION_STAR_COLOR: Rgb = [140, 153, 196];
+/** The dotted lines joining them: dimmer still. */
+export const CONSTELLATION_LINE_COLOR: Rgb = [66, 78, 116];
 /** The page the space fades into. */
 export const PAGE_COLOR: Rgb = [255, 255, 255];
 /** The ramp characters at the faint edge of the fade: light enough to be barely there against white. */

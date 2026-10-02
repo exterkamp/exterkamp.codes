@@ -3,9 +3,9 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { AsciiGlobe, buildSpace, RESIZE_DEBOUNCE_MS, SPACE_FADE, SPACE_ROWS, spaceCols } from './ascii-globe';
-import { css, SPACE_COLOR } from './globe-palette';
+import { CONSTELLATION_LINE_COLOR, CONSTELLATION_STAR_COLOR, css, SPACE_COLOR, STAR_COLOR } from './globe-palette';
 import { MARKER, unproject } from './globe-renderer';
-import { RAMP } from './space';
+import { MAX_ANIMATED, RAMP } from './space';
 import { Note } from './notes.service';
 
 const configure = () =>
@@ -107,7 +107,8 @@ describe('AsciiGlobe', () => {
     }
     // The interior is a single element with the space color, holding no cells.
     expect(solid.style.backgroundColor).toBe(probe.style.backgroundColor);
-    expect(solid.querySelectorAll('*').length).toBe(0);
+    expect(solid.querySelectorAll('*:not(span)').length).toBe(0);
+    expect(solid.querySelectorAll('span').length).toBeLessThan(1000);
     expect(solid.textContent!.replace(/[\n ]/g, '').length).toBeGreaterThan(0);
   });
 
@@ -775,6 +776,106 @@ describe('AsciiGlobe', () => {
       await setup();
       flushLoad(Array.from({ length: 9 }, (_, i) => note(i + 1, 0, i * 5 - 20)));
       expect(markerCount()).toBe(5);
+    });
+  });
+
+  describe('space animation', () => {
+    /** The component's stylesheet text, as Angular put it in the page. */
+    const styleText = () =>
+      Array.from(document.querySelectorAll('style'))
+        .map((el) => el.textContent ?? '')
+        .join('\n');
+
+    /** The text between the braces that follow `start`. */
+    const block = (css: string, start: number) => {
+      let depth = 0;
+      for (let i = css.indexOf('{', start); i < css.length; i++) {
+        if (css[i] === '{') depth++;
+        if (css[i] === '}' && --depth === 0) return css.slice(css.indexOf('{', start) + 1, i);
+      }
+      return '';
+    };
+
+    it('animates only opacity and transform', async () => {
+      const fixture = TestBed.createComponent(AsciiGlobe);
+      await fixture.whenStable();
+      const css = styleText();
+      const names = [...css.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => ({ name: m[1], at: m.index! }));
+      expect(names.map((n) => n.name.replace(/^.*star-/, 'star-')).sort()).toEqual(['star-glitter', 'star-twinkle']);
+      for (const { at } of names) {
+        const props = [...block(css, at).matchAll(/([\w-]+)\s*:/g)].map((m) => m[1]);
+        expect(props.length).toBeGreaterThan(0);
+        for (const prop of props) expect(['opacity', 'transform']).toContain(prop);
+      }
+    });
+
+    it('draws the stars and constellations as spans, with seeded durations, and keeps them under the animation cap', async () => {
+      const fixture = TestBed.createComponent(AsciiGlobe);
+      await fixture.whenStable();
+      const space: HTMLElement = fixture.nativeElement.querySelector('.space');
+      const moving = [...space.querySelectorAll<HTMLElement>('.twinkle, .glitter')];
+      expect(moving.length).toBeLessThanOrEqual(MAX_ANIMATED);
+      for (const el of moving) {
+        expect(el.style.getPropertyValue('--dur')).toMatch(/^\d+(\.\d+)?s$/);
+        expect(el.style.getPropertyValue('--delay')).toMatch(/^\d+(\.\d+)?s$/);
+      }
+      expect(getComputedStyle(space).pointerEvents).toBe('none');
+      expect(space.querySelectorAll('*').length).toBeLessThan(8000);
+    });
+
+    it('draws constellations in colors dimmer than the stars', () => {
+      const luminance = ([r, g, b]: readonly number[]) => {
+        const lin = (v: number) => ((v / 255) ** 2.2);
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+      };
+      const contrast = (fg: readonly number[]) => (luminance(fg) + 0.05) / (luminance(SPACE_COLOR) + 0.05);
+      expect(contrast(CONSTELLATION_LINE_COLOR)).toBeLessThan(contrast(CONSTELLATION_STAR_COLOR));
+      expect(contrast(CONSTELLATION_STAR_COLOR)).toBeLessThan(contrast(STAR_COLOR));
+    });
+
+    it('stops every animation in the space under reduced motion, and the stars are still drawn', async () => {
+      const fixture = TestBed.createComponent(AsciiGlobe);
+      await fixture.whenStable();
+      const css = styleText();
+      const media = css.indexOf('@media (prefers-reduced-motion: reduce)');
+      expect(media).toBeGreaterThan(-1);
+      const rules = block(css, media);
+      expect(rules).toMatch(/\.space[^{]*\*\s*\{\s*animation:\s*none\s*!important/);
+      // Nothing is removed from the page: the stars are drawn either way.
+      const space: HTMLElement = fixture.nativeElement.querySelector('.space');
+      expect(space.querySelectorAll('.twinkle').length).toBeGreaterThan(0);
+    });
+
+    it('pauses when the globe is off screen and resumes when it is back', async () => {
+      let notify: IntersectionObserverCallback = () => {};
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          constructor(cb: IntersectionObserverCallback) {
+            notify = cb;
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+      const fixture = TestBed.createComponent(AsciiGlobe);
+      await fixture.whenStable();
+      const space: HTMLElement = fixture.nativeElement.querySelector('.space');
+      expect(space.classList.contains('paused')).toBe(false);
+      notify([{ isIntersecting: false } as IntersectionObserverEntry], {} as IntersectionObserver);
+      expect(space.classList.contains('paused')).toBe(true);
+      notify([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+      expect(space.classList.contains('paused')).toBe(false);
+      vi.unstubAllGlobals();
+    });
+
+    it('has a rule that pauses every animation in the space while paused', async () => {
+      const fixture = TestBed.createComponent(AsciiGlobe);
+      await fixture.whenStable();
+      const css = styleText();
+      const at = css.search(/\.space\.paused[^{]*\*\s*\{/);
+      expect(at).toBeGreaterThan(-1);
+      expect(block(css, at)).toMatch(/animation-play-state:\s*paused/);
     });
   });
 });

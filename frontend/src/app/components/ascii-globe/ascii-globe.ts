@@ -11,7 +11,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { cellRgb, css, inkColor, MARKER_CELL, NO_CELL, SPACE_COLOR, STAR_COLOR, TINT_STEPS, tintColor, tintStep } from './globe-palette';
+import { CONSTELLATION_LINE_COLOR, CONSTELLATION_STAR_COLOR, cellRgb, css, inkColor, MARKER_CELL, NO_CELL, SPACE_COLOR, STAR_COLOR, TINT_STEPS, tintColor, tintStep } from './globe-palette';
 import { createGlobe, markerCell, project, Spot, unproject } from './globe-renderer';
 import { assignSlots, cellCenter, advancePanels, layoutLanes, LANES, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, placementRank, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
@@ -234,9 +234,10 @@ export class AsciiGlobe {
   }
 
   /**
-   * Draws the dark space as a band as wide as the page. It is static: the same grain and stars on every frame, so it
+   * Draws the dark space as a band as wide as the page. It is built once: the same grain and stars on every frame, so it
    * is only rebuilt when the page width changes. The top and bottom fades are spans per run of cells; the solid middle
-   * is one element with a CSS background, holding only the stars.
+   * is one element with a CSS background, holding the stars as text. Stars that twinkle or glitter and the constellations
+   * are spans in it; CSS animates them (opacity and transform only), so the script does nothing per frame.
    */
   private drawSpace(el: HTMLElement) {
     const width = this.viewportWidth();
@@ -293,11 +294,27 @@ export class AsciiGlobe {
     solid.className = 'solid';
     solid.style.backgroundColor = styles[TINT_STEPS - 1].background;
     solid.style.color = styles[TINT_STEPS - 1].color;
-    const lines: string[] = [];
+    solid.style.setProperty('--constellation-star', css(CONSTELLATION_STAR_COLOR));
+    solid.style.setProperty('--constellation-line', css(CONSTELLATION_LINE_COLOR));
+    // Plain text, except the few cells that animate or belong to a constellation: each of those is a span that CSS animates.
+    const classes = { twinkle: 'twinkle', glitter: 'glitter', 'constellation-star': 'constellation-star', 'constellation-line': 'constellation-line' };
+    let mark = 0;
     for (let r = SPACE_FADE.top; r < space.rows - SPACE_FADE.bottom; r++) {
-      lines.push(space.glyphs.slice(r * space.cols, (r + 1) * space.cols).join(''));
+      let from = 0;
+      while (mark < space.marks.length && space.marks[mark].row === r) {
+        const m = space.marks[mark++];
+        const i = r * space.cols;
+        solid.appendChild(document.createTextNode(space.glyphs.slice(i + from, i + m.col).join('')));
+        const span = document.createElement('span');
+        span.className = classes[m.kind];
+        if (m.duration !== undefined) span.style.cssText = `--dur:${m.duration.toFixed(2)}s;--delay:${m.delay!.toFixed(2)}s`;
+        span.textContent = m.char;
+        solid.appendChild(span);
+        from = m.col + 1;
+      }
+      const i = r * space.cols;
+      solid.appendChild(document.createTextNode(space.glyphs.slice(i + from, i + space.cols).join('') + (r < space.rows - SPACE_FADE.bottom - 1 ? '\n' : '')));
     }
-    solid.textContent = lines.join('\n');
     this.spaceNodes = [fade(0, SPACE_FADE.top, 'fade-top'), solid, fade(space.rows - SPACE_FADE.bottom, space.rows, 'fade-bottom')];
     el.replaceChildren(...this.spaceNodes);
   }
@@ -518,6 +535,8 @@ export class AsciiGlobe {
       const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
       let onScreen = true;
       const update = () => {
+        // The space's CSS animations stop with the globe's spin when it is off screen.
+        this.spaceEl().nativeElement.classList.toggle('paused', !onScreen);
         if (onScreen && !reducedMotion?.matches) {
           start();
         } else {
