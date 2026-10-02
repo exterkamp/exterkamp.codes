@@ -97,6 +97,8 @@ export interface PlacementOptions {
   fadeTop: number;
   fadeBottom: number;
   centerCol: number;
+  /** Rows to push every figure down by: the headline's rows above the globe, so the figures keep their place beside it. */
+  rowOffset?: number;
   /** The globe's outline in cells. Figures keep a margin of cells away from it. */
   clear: { col: number; row: number; rx: number; ry: number };
 }
@@ -106,10 +108,10 @@ export const GLOBE_MARGIN = 2;
 
 /** The figures that fit: every cell inside the solid rows and the band, and outside the globe's clear zone. */
 export function placeConstellations(options: PlacementOptions): PlacedConstellation[] {
-  const { cols, rows, fadeTop, fadeBottom, centerCol, clear } = options;
+  const { cols, rows, fadeTop, fadeBottom, centerCol, clear, rowOffset = 0 } = options;
   const placed: PlacedConstellation[] = [];
   for (const figure of CONSTELLATIONS) {
-    const stars: Point[] = figure.stars.map(([x, y]) => ({ col: centerCol + figure.origin.dc + x, row: figure.origin.row + y }));
+    const stars: Point[] = figure.stars.map(([x, y]) => ({ col: centerCol + figure.origin.dc + x, row: figure.origin.row + rowOffset + y }));
     const lines = figure.edges.flatMap(([a, b]) => rasterizeLine(stars[a], stars[b]));
     const fits = [...stars, ...lines].every(
       (p) =>

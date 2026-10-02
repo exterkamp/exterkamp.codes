@@ -23,7 +23,9 @@ const COLS = 61;
 const ROWS = Math.round(COLS * 0.6);
 /** Rows of dark space above and below the globe. Each edge fades over its own rows: from the white page at the top, back to it at the bottom. */
 export const SPACE_FADE = { top: 12, bottom: 12 };
-export const SPACE_ROWS = ROWS + SPACE_FADE.top + SPACE_FADE.bottom;
+/** Rows of solid space the headline takes, between the top fade and the globe. The headline's box is exactly this many rows tall (9em in the stylesheet). */
+export const HEADLINE_ROWS = 9;
+export const SPACE_ROWS = ROWS + HEADLINE_ROWS + SPACE_FADE.top + SPACE_FADE.bottom;
 /** Fixed seed and density for the stars, so they are the same on every frame and every visit. */
 const STAR_SEED = 20;
 const STAR_CHANCE = 0.035;
@@ -45,7 +47,8 @@ export function buildSpace(cols: number): Space {
     seed: STAR_SEED,
     starChance: STAR_CHANCE,
     centerCol: Math.floor(cols / 2),
-    clear: { col: cols / 2, row: SPACE_FADE.top + ROWS / 2, rx: COLS / 2, ry: ROWS / 2 },
+    rowOffset: HEADLINE_ROWS,
+    clear: { col: cols / 2, row: SPACE_FADE.top + HEADLINE_ROWS + ROWS / 2, rx: COLS / 2, ry: ROWS / 2 },
   });
 }
 
