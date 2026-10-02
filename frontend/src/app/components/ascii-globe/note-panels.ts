@@ -231,6 +231,7 @@ export function layoutLanes(
         side = found.side;
       } else {
         // Nowhere is clear: the lane with the least trouble, nearest home, but not one it just left. It comes back blocked.
+        // `allowed` can legitimately collapse to just `current` (every other lane recently left); the panel then stays put, blocked.
         const allowed = nearHome.filter((l) => !recent.some((r) => r.lane === l));
         lane = (allowed.length ? allowed : [current]).reduce((best, l) => (trouble(l, side, 0) < trouble(best, side, 0) ? l : best));
       }

@@ -492,7 +492,7 @@ describe.each([
   it.each(sets)('never flaps back to a lane within the hold window, over %s', (_n, notes) => {
     const { frames } = simulate(box, stage, maxWidth, fps, notes, 4);
     const changes = laneChanges(frames, fps);
-    const flaps = changes.filter((c, i) => changes.slice(0, i).some((p) => p.id === c.id && p.to === c.from && p.from === c.to && c.at - p.at < 6));
+    const flaps = changes.filter((c, i) => changes.slice(0, i).some((p) => p.id === c.id && p.to === c.from && p.from === c.to && c.at - p.at < LANE_HOLD - 2));
     expect(flaps).toEqual([]);
   });
 
