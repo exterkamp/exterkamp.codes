@@ -36,25 +36,26 @@
   pointer-events: none;
 }
 
-// Stars that twinkle or glitter, and the constellations, are spans made by script in the interior. Animations only
-// change opacity and transform, which the browser can run off the main thread. Each star has its own --dur and --delay.
+// Stars that twinkle, and the constellations, are spans made by script in the interior. A twinkling star changes its
+// character, stepping up and down the star glyphs, and never its size: the span keeps its glyph as hidden text (so the
+// cell keeps its width), and ::before draws the current glyph over it. Each star has its own --dur and --delay.
 .space ::ng-deep {
-  .twinkle,
-  .glitter {
-    display: inline-block;
-    animation-duration: var(--dur);
-    animation-delay: calc(-1 * var(--delay));
-    animation-iteration-count: infinite;
-  }
-
   .twinkle {
-    animation-name: star-twinkle;
-    animation-timing-function: ease-in-out;
-  }
+    display: inline-block;
+    position: relative;
+    width: 1ch;
+    visibility: hidden;
 
-  .glitter {
-    animation-name: star-glitter;
-    animation-timing-function: ease-in-out;
+    // Without animation (reduced motion) the star keeps the glyph it was given.
+    &::before {
+      content: attr(data-char);
+      position: absolute;
+      inset: 0;
+      text-align: center;
+      visibility: visible;
+      animation: star-twinkle var(--dur) step-end infinite;
+      animation-delay: calc(-1 * var(--delay));
+    }
   }
 
   .constellation-star {
@@ -66,38 +67,52 @@
   }
 }
 
+// Faint dot to bright four-spoked star and back, as the glyphs of STAR_GLYPHS in order; mostly dim, so it reads as flicker.
 @keyframes star-twinkle {
   0%,
+  96%,
   100% {
-    opacity: 0.25;
+    content: '·';
   }
-  50% {
-    opacity: 1;
+  25% {
+    content: '✻';
   }
-}
-
-// Dim for most of the cycle, then one flash: brighter and a little larger, for well under a second.
-@keyframes star-glitter {
-  0%,
-  94%,
-  100% {
-    opacity: 0.6;
-    transform: scale(1);
+  35% {
+    content: '✽';
   }
-  97% {
-    opacity: 1;
-    transform: scale(1.7);
+  45% {
+    content: '✶';
+  }
+  52% {
+    content: '✳';
+  }
+  58% {
+    content: '✢';
+  }
+  66% {
+    content: '✳';
+  }
+  74% {
+    content: '✶';
+  }
+  82% {
+    content: '✽';
+  }
+  90% {
+    content: '✻';
   }
 }
 
 // Off screen, the animations pause.
-.space.paused ::ng-deep * {
+.space.paused ::ng-deep *,
+.space.paused ::ng-deep *::before {
   animation-play-state: paused;
 }
 
 // Reduced motion: the stars and constellations stay drawn, but nothing moves.
 @media (prefers-reduced-motion: reduce) {
-  .space ::ng-deep * {
+  .space ::ng-deep *,
+  .space ::ng-deep *::before {
     animation: none !important;
   }
 }
