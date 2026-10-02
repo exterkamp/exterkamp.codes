@@ -1,6 +1,8 @@
 <div #stage class="stage">
   <!-- Decoration only: a static dark ASCII space, drawn behind the globe. -->
   <div #space class="space" aria-hidden="true"></div>
+  <!-- Real text for screen readers and sighted visitors alike; it sits over the space and lets clicks through. -->
+  <h2 class="headline">leave your mark on the world</h2>
   <!-- Note text is user-supplied: only ever bound as text, never as HTML. -->
   <pre #globe class="globe" aria-hidden="true"></pre>
 

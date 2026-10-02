@@ -1,5 +1,5 @@
 import { CONSTELLATIONS, placeConstellations, PlacedConstellation, rasterizeLine, slopeChar } from './constellations';
-import { SPACE_FADE, SPACE_ROWS, buildSpace, spaceCols } from './ascii-globe';
+import { HEADLINE_ROWS, SPACE_FADE, SPACE_ROWS, buildSpace, spaceCols } from './ascii-globe';
 
 const ROWS = 37;
 const GLOBE = { rx: 61 / 2, ry: ROWS / 2 };
@@ -14,7 +14,8 @@ const place = (width: number): { cols: number; figures: PlacedConstellation[] } 
       fadeTop: SPACE_FADE.top,
       fadeBottom: SPACE_FADE.bottom,
       centerCol: Math.floor(cols / 2),
-      clear: { col: cols / 2, row: SPACE_FADE.top + ROWS / 2, ...GLOBE },
+      rowOffset: HEADLINE_ROWS,
+      clear: { col: cols / 2, row: SPACE_FADE.top + HEADLINE_ROWS + ROWS / 2, ...GLOBE },
     }),
   };
 };
@@ -55,8 +56,10 @@ describe('constellation placement', () => {
           expect(p.col).toBeLessThan(cols);
           expect(p.row).toBeGreaterThanOrEqual(SPACE_FADE.top);
           expect(p.row).toBeLessThan(SPACE_ROWS - SPACE_FADE.bottom);
-          const inGlobe = Math.hypot((p.col + 0.5 - cols / 2) / GLOBE.rx, (p.row + 0.5 - (SPACE_FADE.top + ROWS / 2)) / GLOBE.ry) <= 1;
+          const inGlobe = Math.hypot((p.col + 0.5 - cols / 2) / GLOBE.rx, (p.row + 0.5 - (SPACE_FADE.top + HEADLINE_ROWS + ROWS / 2)) / GLOBE.ry) <= 1;
           expect(inGlobe).toBe(false);
+          // Nothing is drawn in the rows the headline takes.
+          expect(p.row < SPACE_FADE.top || p.row >= SPACE_FADE.top + HEADLINE_ROWS).toBe(true);
           const key = `${p.col},${p.row}`;
           // No cell is used by two figures.
           expect(seen.has(key) && seen.get(key) !== f.name).toBe(false);

@@ -36,6 +36,28 @@
   pointer-events: none;
 }
 
+.headline {
+  // Over the stars, never in the way of clicks. Its box is exactly HEADLINE_ROWS rows tall (the space reserves them),
+  // room for two lines at this size, so the band's height never depends on how the text wraps.
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 2.25em; // 9 rows of the stage (the headline is 4x its font size)
+  margin: 0;
+  padding: 0 0.25em;
+  font-family: 'ExterWrite', sans-serif;
+  font-weight: normal;
+  font-size: 4em;
+  line-height: 1.1;
+  text-align: center;
+  color: #fff;
+  pointer-events: none;
+  user-select: none;
+}
+
 // Stars that twinkle, and the constellations, are spans made by script in the interior. A twinkling star changes its
 // character, stepping up and down the star glyphs, and never its size: the span keeps its glyph as hidden text (so the
 // cell keeps its width), and ::before draws the current glyph over it. Each star has its own --dur and --delay.

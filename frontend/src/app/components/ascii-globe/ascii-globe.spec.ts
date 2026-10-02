@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { AsciiGlobe, buildSpace, RESIZE_DEBOUNCE_MS, SPACE_FADE, SPACE_ROWS, spaceCols } from './ascii-globe';
+import { AsciiGlobe, buildSpace, HEADLINE_ROWS, RESIZE_DEBOUNCE_MS, SPACE_FADE, SPACE_ROWS, spaceCols } from './ascii-globe';
 import { CONSTELLATION_LINE_COLOR, CONSTELLATION_STAR_COLOR, css, SPACE_COLOR, STAR_COLOR } from './globe-palette';
 import { MARKER, unproject } from './globe-renderer';
 import { MAX_ANIMATED, RAMP, STAR_GLYPHS } from './space';
@@ -57,7 +57,71 @@ describe('AsciiGlobe', () => {
     expect(spaceCols(100, 7.2)).toBe(61);
     expect(buildSpace(200).cols).toBe(200);
     expect(buildSpace(200).rows).toBe(SPACE_ROWS);
-    expect(SPACE_ROWS).toBe(37 + 12 + 12);
+    expect(SPACE_ROWS).toBe(37 + HEADLINE_ROWS + 12 + 12);
+    expect(HEADLINE_ROWS).toBe(9);
+  });
+
+  describe('headline', () => {
+    const setup = async () => {
+      const fixture = TestBed.createComponent(AsciiGlobe);
+      document.body.appendChild(fixture.nativeElement);
+      await fixture.whenStable();
+      const root: HTMLElement = fixture.nativeElement;
+      return { fixture, root, h: root.querySelector('h2.headline') as HTMLElement };
+    };
+
+    it('is a heading with the exact text, outside the aria-hidden space and globe', async () => {
+      const { root, h } = await setup();
+      expect(h).toBeTruthy();
+      expect(h.tagName).toBe('H2');
+      expect(h.textContent).toBe('leave your mark on the world');
+      expect(h.closest('[aria-hidden="true"]')).toBeNull();
+      expect(root.querySelector('.space')!.contains(h)).toBe(false);
+    });
+
+    it('is white, static and lets clicks through', async () => {
+      const { h } = await setup();
+      const style = getComputedStyle(h);
+      expect(style.color).toBe('rgb(255, 255, 255)');
+      expect(style.pointerEvents).toBe('none');
+    });
+
+    it('comes after the space and before the globe, and the space reserves its rows above the globe', async () => {
+      const { root, h } = await setup();
+      const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(follows(root.querySelector('.space')!, h)).toBe(true);
+      expect(follows(h, root.querySelector('.globe')!)).toBe(true);
+      // Top fade, then the headline's rows, then the globe, then the bottom fade: the band grew by the headline only.
+      const space = buildSpace(200);
+      expect(space.rows - SPACE_FADE.top - SPACE_FADE.bottom - HEADLINE_ROWS).toBe(37);
+    });
+
+    // The test DOM has no layout, so read the stylesheet's em lengths: the stage is the 1em row unit,
+    // the headline's font-size is a multiple of it, and its height is a multiple of its own font-size.
+    it('is exactly HEADLINE_ROWS stage rows tall, whatever its text does', async () => {
+      const { h } = await setup();
+      const style = getComputedStyle(h);
+      expect(style.height).toMatch(/em$/);
+      expect(style.fontSize).toMatch(/em$/);
+      expect(parseFloat(style.height) * parseFloat(style.fontSize)).toBeCloseTo(HEADLINE_ROWS, 5);
+      // A fixed height with a border box: wrapped text can't make it grow.
+      expect(style.boxSizing).toBe('border-box');
+    });
+
+    it('sits after the top fade rows the stage reserves above it', async () => {
+      const { root } = await setup();
+      const stage = root.querySelector('.stage') as HTMLElement;
+      expect(parseFloat(getComputedStyle(stage).paddingTop)).toBe(SPACE_FADE.top);
+      expect(getComputedStyle(stage).paddingTop).toMatch(/em$/);
+    });
+
+    it('keeps the space\'s constellations out of the headline rows', () => {
+      const { constellations } = buildSpace(spaceCols(1440, 7.2));
+      expect(constellations.length).toBeGreaterThan(0);
+      const rows = constellations.flatMap((f) => [...f.stars, ...f.lines].map((c) => c.row));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const r of rows) expect(r < SPACE_FADE.top || r >= SPACE_FADE.top + HEADLINE_ROWS).toBe(true);
+    });
   });
 
   it('draws the dark space once, static and hidden from screen readers', async () => {
@@ -68,7 +132,7 @@ describe('AsciiGlobe', () => {
     const { lines } = spaceBlocks(space);
     const cols = spaceCols(0, 7);
     expect(lines('fade-top').length).toBe(SPACE_FADE.top);
-    expect(lines('solid').length).toBe(37);
+    expect(lines('solid').length).toBe(37 + HEADLINE_ROWS);
     expect(lines('fade-bottom').length).toBe(SPACE_FADE.bottom);
     for (const name of ['fade-top', 'solid', 'fade-bottom']) expect(lines(name).every((l) => l.length === cols)).toBe(true);
     const before = space.innerHTML;

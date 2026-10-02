@@ -15,6 +15,8 @@ export interface SpaceOptions {
   starChance: number;
   /** Cells are keyed by their row and their column relative to this one (usually the middle), so changing `cols` never shuffles the cells near the center. */
   centerCol: number;
+  /** Rows the constellations are pushed down by (the headline above the globe). */
+  rowOffset?: number;
   /** Cells inside this ellipse (the globe's outline, in cells) get no stars, since the globe is drawn over them. */
   clear: { col: number; row: number; rx: number; ry: number };
 }
@@ -85,7 +87,7 @@ export function cellRandom(seed: number, row: number, col: number, stream: numbe
 }
 
 export function createSpace(options: SpaceOptions): Space {
-  const { cols, rows, fadeTop, fadeBottom, starChance, clear, seed, centerCol } = options;
+  const { cols, rows, fadeTop, fadeBottom, starChance, clear, seed, centerCol, rowOffset } = options;
   const levels = new Float32Array(cols * rows);
   const glyphs: string[] = new Array(cols * rows).fill(' ');
   const motion = new Map<number, SpaceMark>();
@@ -113,7 +115,7 @@ export function createSpace(options: SpaceOptions): Space {
   // Over the cap, the stars that keep moving are picked by their own hash rather than by position, so no part of the sky goes still first.
   if (moving.length > MAX_ANIMATED) moving.sort((a, b) => a.rank - b.rank).length = MAX_ANIMATED;
   for (const { mark } of moving) motion.set(mark.row * cols + mark.col, mark);
-  const constellations = placeConstellations({ cols, rows, fadeTop, fadeBottom, centerCol, clear });
+  const constellations = placeConstellations({ cols, rows, fadeTop, fadeBottom, centerCol, clear, rowOffset });
   const draw = (cell: LineCell, kind: SpaceMark['kind']) => {
     const i = cell.row * cols + cell.col;
     glyphs[i] = cell.char;
