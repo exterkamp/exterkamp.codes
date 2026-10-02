@@ -182,7 +182,11 @@
   gap: 0.375rem;
   width: min(13rem, 55%);
   max-width: none;
-  pointer-events: auto;
+  pointer-events: none;
+
+  &.active {
+    pointer-events: auto;
+  }
 
   label {
     display: flex;
@@ -210,6 +214,12 @@
 .note-error {
   margin: 0;
   color: rgb(241, 16, 16);
+}
+
+// A failed save whose panel could not open again, shown under the globe where it is always in view.
+.notice {
+  position: relative;
+  text-align: center;
 }
 
 @media (prefers-reduced-motion: reduce) {

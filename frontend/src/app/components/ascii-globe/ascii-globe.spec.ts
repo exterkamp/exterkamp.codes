@@ -524,6 +524,38 @@ describe('AsciiGlobe', () => {
       expect(panelTexts()).toEqual(['too much']);
     });
 
+    it('does not reopen the panel, and says why in view, if the failed note is now on the far side', async () => {
+      await setup();
+      click();
+      el('input').value = 'gone round';
+      el('form').dispatchEvent(new Event('submit', { cancelable: true }));
+      // The globe kept spinning while the request was out.
+      fixture.componentInstance['facing'] = () => false;
+
+      http.expectOne('/api/notes').flush('boom', { status: 500, statusText: 'Server Error' });
+      fixture.detectChanges();
+      await fixture.whenStable();
+      expect(el('form')).toBeNull();
+      expect(fixture.componentInstance['pending']()).toBeNull();
+      expect(el('.notice').textContent).toContain("Couldn't save that note");
+      expect(el('.notice').getAttribute('role')).toBe('alert');
+    });
+
+    it('keeps the new note empty and shows the failure as a notice if another note is being written', async () => {
+      await setup();
+      click();
+      el('input').value = 'first';
+      el('form').dispatchEvent(new Event('submit', { cancelable: true }));
+      click({ clientX: 150, clientY: 150 });
+      await fixture.whenStable();
+
+      http.expectOne('/api/notes').flush('boom', { status: 500, statusText: 'Server Error' });
+      fixture.detectChanges();
+      expect(el('input').value).toBe('');
+      expect(el('form .note-error')).toBeNull();
+      expect(el('.notice').textContent).toContain("Couldn't save that note");
+    });
+
     describe('editing in place', () => {
       const editPanel = () => el('.panel.editing') as HTMLElement;
       const top = (panel: HTMLElement) => Number(/translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(panel.style.transform)![2]);

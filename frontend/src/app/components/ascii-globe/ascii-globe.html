@@ -26,6 +26,10 @@
     }
   </div>
 
+  @if (notice()) {
+    <p class="note-error notice" role="alert">{{ notice() }}</p>
+  }
+
   <svg #links class="links" aria-hidden="true">
     @for (note of shown(); track $index) {
       <g class="link slot" [class.active]="slots()[$index]">

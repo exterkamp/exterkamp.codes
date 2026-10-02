@@ -114,11 +114,14 @@ export class AsciiGlobe {
   /** The last note each slot held, so a panel keeps its text while it fades out. */
   protected readonly shown = signal<Slots>(this.activeSlots);
   protected readonly error = signal('');
+  /** Why a save failed when its panel could not open again (the pin is out of sight, or another note is being written). */
+  protected readonly notice = signal('');
 
   protected cancel() {
     this.pending.set(null);
     this.draft.set('');
     this.error.set('');
+    this.notice.set('');
     this.redraw();
   }
 
@@ -129,6 +132,7 @@ export class AsciiGlobe {
     this.pending.set(null);
     this.draft.set('');
     this.error.set('');
+    this.notice.set('');
 
     // Show it right away; the server's copy replaces it once saved.
     const temp: Note = { id: this.nextTempId--, ...spot, text, created_at: new Date().toISOString() };
@@ -141,15 +145,19 @@ export class AsciiGlobe {
       },
       error: (err: HttpErrorResponse) => {
         this.rotation.remove(temp.id);
-        // Open the panel again with the text, unless the visitor has already started another note.
-        if (!this.pending()) {
+        const message =
+          err.status === 429 ? 'Too many notes, try again in a bit.' : "Couldn't save that note, sorry.";
+        // Open the panel again with the text, but only where it can be seen: the globe kept spinning during the save,
+        // so the pin may be on the far side now, and the visitor may have started another note.
+        const visible = this.facing({ id: EDITING_ID, ...spot, text: '', created_at: '' });
+        if (!this.pending() && visible) {
           this.pending.set(spot);
           this.draft.set(text);
+          this.error.set(message);
           this.focusEditor();
+        } else {
+          this.notice.set(message);
         }
-        this.error.set(
-          err.status === 429 ? 'Too many notes, try again in a bit.' : "Couldn't save that note, sorry.",
-        );
       },
     });
   }
@@ -530,6 +538,7 @@ export class AsciiGlobe {
             const spot = unproject(x, y, angle, TILT);
             if (spot) {
               this.error.set('');
+    this.notice.set('');
               this.pending.set(spot);
               // The globe stops now, whatever it was doing.
               velocity = 0;
