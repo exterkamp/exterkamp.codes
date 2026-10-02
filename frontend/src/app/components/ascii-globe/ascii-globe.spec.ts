@@ -299,6 +299,23 @@ describe('AsciiGlobe', () => {
       expect(fast).not.toBe(slow);
     });
 
+    it('stops on a click and stays still until the note is cancelled, then turns again', async () => {
+      await setup();
+      pre.getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 180 }) as DOMRect;
+      run(160);
+      const click = { clientX: 150, clientY: 90 };
+      fire('pointerdown', click);
+      fire('pointerup', click);
+      run(32);
+      const held = pre.textContent;
+      run(2000);
+      expect(pre.textContent).toBe(held);
+      const root: HTMLElement = pre.closest('app-ascii-globe') ?? pre.parentElement!;
+      (root.querySelector('button[type=button]') as HTMLButtonElement).click();
+      run(2000);
+      expect(pre.textContent).not.toBe(held);
+    });
+
     it('does not carry momentum if the pointer rested before release', async () => {
       await setup();
       const fastThenRest = dragAndRelease(-150, 16, 496, 320);
@@ -358,7 +375,7 @@ describe('AsciiGlobe', () => {
     });
 
     const panelTexts = () =>
-      [...fixture.nativeElement.querySelectorAll('.panel.active')].map((p: Element) => p.textContent!.trim());
+      [...fixture.nativeElement.querySelectorAll('.panel.slot.active')].map((p: Element) => p.textContent!.trim());
 
     it('loads saved notes, marks the visible ones and shows the 3 nearest the center in panels', async () => {
       // At angle 0 the center of the globe is (lat 23.4, lon 0).
@@ -482,17 +499,126 @@ describe('AsciiGlobe', () => {
       expect(el('form')).toBeNull();
     });
 
-    it('takes a note back and says why if the backend refuses it', async () => {
+    it('opens the note panel again with the typed text, and says why, if the backend refuses it', async () => {
       await setup();
       click();
       el('input').value = 'too much';
       el('form').dispatchEvent(new Event('submit', { cancelable: true }));
-      expect(markerCount()).toBe(1);
+      expect(el('form')).toBeNull();
 
       http.expectOne('/api/notes').flush({ detail: 'slow down' }, { status: 429, statusText: 'Too Many Requests' });
       fixture.detectChanges();
-      expect(markerCount()).toBe(0);
-      expect(el('.note-error').textContent).toContain('Too many notes');
+      await fixture.whenStable();
+      // The note is gone from the globe, and the panel is back at the spot, holding the text, with the reason inside it.
+      expect(panelTexts()).toEqual([]);
+      expect(el('form')).not.toBeNull();
+      expect(el('input').value).toBe('too much');
+      expect(el('form .note-error').textContent).toContain('Too many notes');
+      expect(el('.note-error').getAttribute('role')).toBe('alert');
+      expect(markerCount()).toBe(1);
+
+      el('form').dispatchEvent(new Event('submit', { cancelable: true }));
+      http.expectOne('/api/notes').flush(note(8, 23.4, 0, 'too much'));
+      fixture.detectChanges();
+      expect(el('form')).toBeNull();
+      expect(panelTexts()).toEqual(['too much']);
+    });
+
+    describe('editing in place', () => {
+      const editPanel = () => el('.panel.editing') as HTMLElement;
+      const top = (panel: HTMLElement) => Number(/translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(panel.style.transform)![2]);
+      /** jsdom has no layout, so give each panel a size. */
+      const sizePanels = () =>
+        fixture.nativeElement.querySelectorAll('.panel').forEach((p: HTMLElement) => {
+          Object.defineProperty(p, 'offsetWidth', { value: 100, configurable: true });
+          Object.defineProperty(p, 'offsetHeight', { value: 40, configurable: true });
+        });
+
+      it('puts the panel, with a line to a marker, in the lane for the clicked latitude, inside the stage', async () => {
+        await setup();
+        click({ clientX: 150, clientY: 60 }); // lat ~ 45: north lane
+        await fixture.whenStable();
+        sizePanels();
+        fixture.componentInstance['redraw']();
+        const panel = editPanel();
+        expect(panel).not.toBeNull();
+        expect(panel.classList.contains('active')).toBe(true);
+        expect(panel.querySelector('input')).not.toBeNull();
+        expect(el('.notes')).toBeNull();
+        expect(top(panel)).toBeCloseTo(0.04 * 180);
+        expect(markerCount()).toBe(1);
+        const line = el('.link.editing line');
+        expect(line.getAttribute('x2')).not.toBeNull();
+        expect(Number(line.getAttribute('x2'))).toBeCloseTo(150, -1);
+      });
+
+      it('uses the lane of the clicked latitude', async () => {
+        await setup();
+        click({ clientX: 150, clientY: 165 }); // southern lane
+        await fixture.whenStable();
+        sizePanels();
+        fixture.componentInstance['redraw']();
+        expect(top(editPanel())).toBeCloseTo(0.62 * 180);
+      });
+
+      it('labels the field with the coordinates and focuses it', async () => {
+        await setup();
+        click();
+        await fixture.whenStable();
+        expect(el('form label').textContent).toContain('23.4°, 0.0°');
+        expect(document.activeElement).toBe(el('input'));
+      });
+
+      it('cancels on Escape or the Cancel button, saving nothing', async () => {
+        await setup();
+        click();
+        el('input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        fixture.detectChanges();
+        expect(el('form')).toBeNull();
+        expect(markerCount()).toBe(0);
+        click();
+        el('form button[type=button]').click();
+        fixture.detectChanges();
+        expect(el('form')).toBeNull();
+        http.expectNone('/api/notes');
+      });
+
+      it('moves the pin, keeping what was typed, when the globe is clicked elsewhere', async () => {
+        await setup();
+        click();
+        el('input').value = 'typed';
+        el('input').dispatchEvent(new Event('input'));
+        click({ clientX: 150, clientY: 60 });
+        await fixture.whenStable();
+        expect(el('form label').textContent).toContain('42.9');
+        expect(el('input').value).toBe('typed');
+        expect(markerCount()).toBe(1);
+      });
+
+      it('takes one of the three slots: at most two saved notes get panels while editing', async () => {
+        await setup([note(1, 23.4, 10, 'a'), note(2, 23.4, -10, 'b'), note(3, 23.4, 20, 'c')]);
+        expect(panelTexts().length).toBe(3);
+        click({ clientX: 150, clientY: 150 });
+        await fixture.whenStable();
+        fixture.detectChanges();
+        expect(panelTexts().length).toBe(2);
+        el('form button[type=button]').click();
+        fixture.componentInstance['redraw']();
+        fixture.detectChanges();
+        expect(panelTexts().length).toBe(3);
+      });
+
+      it('hides the panel while its pin is on the far side, and shows it again', async () => {
+        await setup();
+        click();
+        await fixture.whenStable();
+        const component = fixture.componentInstance as unknown as { pending: { set(v: unknown): void } };
+        component.pending.set({ lat: 0, lon: 180 });
+        fixture.detectChanges();
+        fixture.componentInstance['redraw']();
+        expect(editPanel().classList.contains('active')).toBe(false);
+        expect(editPanel().querySelector('input')).not.toBeNull();
+      });
     });
 
     it('still works if notes cannot be loaded', async () => {
