@@ -90,6 +90,7 @@ export function createSpace(options: SpaceOptions): Space {
   const levels = new Float32Array(cols * rows);
   const glyphs: string[] = new Array(cols * rows).fill(' ');
   const motion = new Map<number, SpaceMark>();
+  const moving: { rank: number; mark: SpaceMark }[] = [];
   for (let r = 0; r < rows; r++) {
     const rowDensity = density(r, rows, fadeTop, fadeBottom);
     for (let c = 0; c < cols; c++) {
@@ -100,16 +101,19 @@ export function createSpace(options: SpaceOptions): Space {
       if (levels[i] < 1) continue;
       const inGlobe = Math.hypot((c + 0.5 - clear.col) / clear.rx, (r + 0.5 - clear.row) / clear.ry) <= 1;
       if (!inGlobe && cellRandom(seed, r, dc, 1) < starChance) glyphs[i] = STAR_GLYPHS[Math.floor(cellRandom(seed, r, dc, 2) * STAR_GLYPHS.length)];
-      if (glyphs[i] === ' ' || r < fadeTop || r >= rows - fadeBottom || motion.size >= MAX_ANIMATED) continue;
+      if (glyphs[i] === ' ' || r < fadeTop || r >= rows - fadeBottom) continue;
       // Which stars move, and how, comes from the cell's own hash, so it is the same on every load and at every width.
       const pick = cellRandom(seed, r, dc, 3);
       const kind = pick < TWINKLE_SHARE ? 'twinkle' : pick < TWINKLE_SHARE + GLITTER_SHARE ? 'glitter' : null;
       if (!kind) continue;
       const range = kind === 'twinkle' ? TWINKLE_SECONDS : GLITTER_SECONDS;
       const duration = range.min + cellRandom(seed, r, dc, 4) * (range.max - range.min);
-      motion.set(i, { row: r, col: c, char: glyphs[i], kind, duration, delay: cellRandom(seed, r, dc, 5) * duration });
+      moving.push({ rank: cellRandom(seed, r, dc, 6), mark: { row: r, col: c, char: glyphs[i], kind, duration, delay: cellRandom(seed, r, dc, 5) * duration } });
     }
   }
+  // Over the cap, the stars that keep moving are picked by their own hash rather than by position, so no part of the sky goes still first.
+  if (moving.length > MAX_ANIMATED) moving.sort((a, b) => a.rank - b.rank).length = MAX_ANIMATED;
+  for (const { mark } of moving) motion.set(mark.row * cols + mark.col, mark);
   const constellations = placeConstellations({ cols, rows, fadeTop, fadeBottom, centerCol, clear });
   const draw = (cell: LineCell, kind: SpaceMark['kind']) => {
     const i = cell.row * cols + cell.col;

@@ -846,11 +846,36 @@ describe('AsciiGlobe', () => {
       expect(space.querySelectorAll('.twinkle').length).toBeGreaterThan(0);
     });
 
-    it('pauses when the globe is off screen', async () => {
+    it('pauses when the globe is off screen and resumes when it is back', async () => {
+      let notify: IntersectionObserverCallback = () => {};
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          constructor(cb: IntersectionObserverCallback) {
+            notify = cb;
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
       const fixture = TestBed.createComponent(AsciiGlobe);
       await fixture.whenStable();
       const space: HTMLElement = fixture.nativeElement.querySelector('.space');
       expect(space.classList.contains('paused')).toBe(false);
+      notify([{ isIntersecting: false } as IntersectionObserverEntry], {} as IntersectionObserver);
+      expect(space.classList.contains('paused')).toBe(true);
+      notify([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+      expect(space.classList.contains('paused')).toBe(false);
+      vi.unstubAllGlobals();
+    });
+
+    it('has a rule that pauses every animation in the space while paused', async () => {
+      const fixture = TestBed.createComponent(AsciiGlobe);
+      await fixture.whenStable();
+      const css = styleText();
+      const at = css.search(/\.space\.paused[^{]*\*\s*\{/);
+      expect(at).toBeGreaterThan(-1);
+      expect(block(css, at)).toMatch(/animation-play-state:\s*paused/);
     });
   });
 });

@@ -221,4 +221,13 @@ describe('star motion', () => {
     expect(motion(space).length).toBeLessThanOrEqual(MAX_ANIMATED);
     expect(space.marks.every((m) => m.row >= big.fadeTop && m.row < big.rows - big.fadeBottom)).toBe(true);
   });
+
+  it('over the cap, keeps animating stars across the whole band rather than only the top rows', () => {
+    const space = createSpace({ ...big, starChance: 0.5 });
+    const rows = motion(space).map((m) => m.row);
+    // A constellation can replace a star cell, so the count may sit a little under the cap.
+    expect(rows.length).toBeGreaterThan(MAX_ANIMATED * 0.9);
+    const mid = (big.fadeTop + big.rows - big.fadeBottom) / 2;
+    expect(rows.filter((r) => r >= mid).length).toBeGreaterThan(MAX_ANIMATED / 4);
+  });
 });
