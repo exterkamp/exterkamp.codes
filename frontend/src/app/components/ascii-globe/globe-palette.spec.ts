@@ -18,6 +18,7 @@ import {
   TERRAIN_COLORS,
   VEGETATION_COLOR,
   FADE_INK,
+  DARK_INK,
   inkColor,
   PAGE_COLOR,
   TINT_STEPS,
@@ -131,5 +132,11 @@ describe('space tint', () => {
     expect(contrast).toBeLessThanOrEqual(1.6);
     expect(inkColor(0)).toEqual(FADE_INK);
     expect(inkColor(TINT_STEPS - 1)).toEqual(STAR_COLOR);
+  });
+
+  it('starts the fade ink light gray at the page and darkens it to almost black next to the solid space', () => {
+    expect(inkColor(TINT_STEPS - 2)).toEqual(DARK_INK);
+    expect(luminance(DARK_INK)).toBeLessThan(0.02);
+    for (let s = 1; s < TINT_STEPS - 1; s++) expect(luminance(inkColor(s))).toBeLessThan(luminance(inkColor(s - 1)));
   });
 });

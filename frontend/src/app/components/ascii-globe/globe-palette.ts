@@ -35,6 +35,8 @@ export const CONSTELLATION_LINE_COLOR: Rgb = [66, 78, 116];
 export const PAGE_COLOR: Rgb = [255, 255, 255];
 /** The ramp characters at the faint edge of the fade: light enough to be barely there against white. */
 export const FADE_INK: Rgb = [205, 208, 218];
+/** The ramp characters on the darkest fade step, next to the solid space: almost black, so the grain stays dark where it meets the space. */
+export const DARK_INK: Rgb = [16, 18, 34];
 
 /** The space's fade is drawn in this many background steps: 0 is the bare page, the last is solid space. */
 export const TINT_STEPS = 7;
@@ -93,7 +95,8 @@ export function tintColor(step: number): Rgb {
   return mix(PAGE_COLOR, SPACE_COLOR, step / (TINT_STEPS - 1));
 }
 
-/** The color of fade characters on a tint step: faint at 0, blending to the star color. */
+/** The color of fade characters on a tint step: light gray at 0, getting darker with each step to almost black on the last fade step. The solid step is the star color, for the stars drawn there. */
 export function inkColor(step: number): Rgb {
-  return mix(FADE_INK, STAR_COLOR, step / (TINT_STEPS - 1));
+  if (step >= TINT_STEPS - 1) return STAR_COLOR;
+  return mix(FADE_INK, DARK_INK, step / (TINT_STEPS - 2));
 }
