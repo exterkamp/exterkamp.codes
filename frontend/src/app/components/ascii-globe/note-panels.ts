@@ -15,7 +15,7 @@ export const PANEL_GAP = 28;
 /** Seconds for a panel to close all but a factor of 1/e of the distance to its target spot. */
 export const PANEL_TAU = 0.1;
 /** Fastest a panel may move (pixels per second), so a change of spot is a glide, never a jump. A pin itself moves far slower. */
-export const PANEL_MAX_SPEED = 360;
+export const PANEL_MAX_SPEED = 240;
 
 // On the unit sphere, z is the cosine of the angle from the point facing the viewer.
 const withinDegrees = (z: number, degrees: number) => z >= Math.cos((degrees * Math.PI) / 180) - 1e-9;
@@ -113,10 +113,13 @@ export const MAX_LINE = 160;
 export const MAX_STEP_X = 12;
 /** Space kept between panels, and around pins, in pixels. */
 const PANEL_MARGIN = 4;
-/** Extra room a lane needs before a panel moves back to it from a neighbor, so it doesn't flap. */
-const RETURN_MARGIN = 12;
-/** Seconds a panel stays in a neighboring lane before it may go back home, so it doesn't flap between two. */
-export const LANE_HOLD = 2;
+/** Extra room a lane needs before a panel moves back to it from a neighbor. Leaving takes a broken rule (no room at all), so the two thresholds differ and a boundary can't flap. */
+const RETURN_MARGIN = 24;
+/**
+ * Seconds after a panel changes lane during which it won't go back to the lane it left, nor
+ * leave a neighbor for home. Longer than the time a panel's pin takes to cross a crowd, so it doesn't flap between two.
+ */
+export const LANE_HOLD = 8;
 
 /** The lane for a latitude. `previous`, the lane the note was in, is kept while the latitude is within the hysteresis of its band. */
 export function laneFor(lat: number, previous?: number, lanes: readonly Lane[] = LANES): number {
@@ -145,6 +148,8 @@ export interface LaneState {
   side: 1 | -1;
   /** Seconds (on the caller's clock) when the panel last changed lane or side. */
   since: number;
+  /** The lanes the panel has left lately, and when, to keep it from flapping back into them. */
+  left?: { lane: number; at: number }[];
 }
 
 export interface LanePlacement extends LaneState {
@@ -205,16 +210,18 @@ export function layoutLanes(
     const current = beforeLane ?? home;
     const away = current !== home;
     const other = -side as 1 | -1;
+    // A lane it left is barred for LANE_HOLD seconds, so a panel pushed out of a lane doesn't bounce back into it.
+    const recent = (before?.left ?? []).filter((l) => now - l.at < LANE_HOLD);
     let lane = current;
     if (away && now - (before?.since ?? -Infinity) >= LANE_HOLD && trouble(home, side, RETURN_MARGIN) === 0) {
       lane = home;
     } else if (trouble(current, side, before ? 0 : PANEL_MARGIN) > 0) {
-      // Look for a clear lane, with some room around the panel; then, if that fails, with none.
+      // Look for a clear lane, with plenty of room around the panel, then some, then none, never one it just left.
       // Failing that the panel may take the other side of its pin (a glide, since its key changes).
       let found: { lane: number; side: 1 | -1 } | undefined;
-      for (const pad of [PANEL_MARGIN, 0]) {
+      for (const pad of [RETURN_MARGIN, PANEL_MARGIN, 0]) {
         for (const s of fits(other) ? [side, other] : [side]) {
-          const l = nearHome.find((l) => trouble(l, s, pad) === 0);
+          const l = nearHome.find((l) => !recent.some((r) => r.lane === l) && trouble(l, s, pad) === 0);
           if (l !== undefined) found ??= { lane: l, side: s };
         }
         if (found) break;
@@ -223,13 +230,15 @@ export function layoutLanes(
         lane = found.lane;
         side = found.side;
       } else {
-        // Nowhere is clear: the lane with the least trouble, nearest home. It comes back blocked.
-        lane = nearHome.reduce((best, l) => (trouble(l, side, 0) < trouble(best, side, 0) ? l : best), home);
+        // Nowhere is clear: the lane with the least trouble, nearest home, but not one it just left. It comes back blocked.
+        const allowed = nearHome.filter((l) => !recent.some((r) => r.lane === l));
+        lane = (allowed.length ? allowed : [current]).reduce((best, l) => (trouble(l, side, 0) < trouble(best, side, 0) ? l : best));
       }
     }
     const rect = rectIn(lane, side);
     const since = before && before.lane === lane && before.side === side && before.since !== undefined ? before.since : now;
-    placed.push({ rect, key: `${lane}:${side}`, home, lane, side, since, blocked: trouble(lane, side, 0) > 0 });
+    const left = before?.lane !== undefined && before.lane !== lane ? [...recent, { lane: before.lane, at: now }] : recent;
+    placed.push({ rect, key: `${lane}:${side}`, home, lane, side, since, left, blocked: trouble(lane, side, 0) > 0 });
     lines.push({ from: nearestEdgePoint(rect, pin), to: pin });
   });
   return placed;

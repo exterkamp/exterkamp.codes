@@ -157,6 +157,14 @@ describe('layoutLanes', () => {
       for (const p of pins) expect(p.x >= r.left && p.x <= r.left + r.width && p.y >= r.top && p.y <= r.top + r.height).toBe(false);
   });
 
+  it('does not move back into a lane it just left, unless that is the only way out', () => {
+    // The panel left lane 0 a second ago; lane 0 is now clear and its own lane 1 is crowded.
+    const state = [undefined, { home: 1, lane: 1, side: 1 as const, since: 0, left: [{ lane: 0, at: 0 }] }];
+    const items = [one(300, 130, 0), one(340, 100, 0)];
+    const [, b] = layoutLanes(items, tops, bounds, state, PANEL_GAP, 1);
+    expect(b.lane).not.toBe(0);
+  });
+
   describe('lines under panels', () => {
     // A pin below the lane-1 panel, whose panel sits in lane 0 on its right: its line runs down through
     // the lane-1 panel for a pin at (300, 130), whose panel is at x 328..428.
@@ -184,7 +192,8 @@ describe('layoutLanes', () => {
     it('moves a later panel that would cover the line of an earlier panel', () => {
       const [f, g] = layoutLanes([low, high], tops, bounds, [stay]);
       expect(f.lane).toBe(0);
-      expect(g.lane).not.toBe(1);
+      // It may take the other side of its pin instead of another lane, which spares it a vertical move.
+      expect(g.key).not.toBe('1:1');
       expect(crosses(f.rect, low.pin, g.rect)).toBe(false);
       expect(crosses(g.rect, high.pin, f.rect)).toBe(false);
     });
@@ -320,8 +329,14 @@ const DEMO_TEXT = DEMO.map((_, i) => 'x'.repeat(30 + ((i * 7) % 18)));
 type Frame = { id: number; rect: Rect; target: Rect; pin: { x: number; y: number }; lane: number; key: string; first: boolean };
 
 /** Runs the panel pipeline (as the component does) over one full turn of the globe, frame by frame. */
-function simulate(box: { left: number; top: number; width: number; height: number }, stage: { width: number }, panelMaxWidth: number, fps = 60) {
-  const notes = DEMO.map(([lat, lon], i) => ({ ...note(i + 1, lon, lat), text: DEMO_TEXT[i] }));
+function simulate(
+  box: { left: number; top: number; width: number; height: number },
+  stage: { width: number },
+  panelMaxWidth: number,
+  fps = 60,
+  notes: Note[] = DEMO.map(([lat, lon], i) => ({ ...note(i + 1, lon, lat), text: DEMO_TEXT[i] })),
+  turns = 1,
+) {
   const tilt = (23.4 * Math.PI) / 180;
   const sizeOf = (n: Note) => {
     const perLine = Math.floor((panelMaxWidth - 22) / 7.5);
@@ -333,7 +348,7 @@ function simulate(box: { left: number; top: number; width: number; height: numbe
   let state = new Map<number, PanelState>();
   const cooling = new Map<number, number>();
   const frames: Frame[][] = [];
-  for (let f = 0; f < fps * 30; f++) {
+  for (let f = 0; f < fps * 30 * turns; f++) {
     const angle = (f / (fps * 30)) * 2 * Math.PI;
     slots = assignSlots(slots, nearestInZone(notes.filter((n) => (cooling.get(n.id) ?? 0) <= f), angle, tilt, slots));
     // Panels already showing are placed first, as the component does.
@@ -435,6 +450,67 @@ describe.each([
     const own = frames.filter((f) => f.some((a) => contains(a.rect, a.pin)));
     expect(rects.length / frames.length).toBeLessThan(0.15);
     expect(own.length / frames.length).toBeLessThan(0.15);
+  });
+});
+
+/** Every lane change of every panel, as the time (s) it happened and the lanes it went from and to, while the panel stayed shown. */
+function laneChanges(frames: Frame[][], fps: number) {
+  const last = new Map<number, number>();
+  const out: { id: number; at: number; from: number; to: number }[] = [];
+  frames.forEach((frame, f) => {
+    const ids = new Set(frame.map((x) => x.id));
+    for (const id of last.keys()) if (!ids.has(id)) last.delete(id);
+    for (const x of frame) {
+      const was = last.get(x.id);
+      if (was !== undefined && was !== x.lane) out.push({ id: x.id, at: f / fps, from: was, to: x.lane });
+      last.set(x.id, x.lane);
+    }
+  });
+  return out;
+}
+
+/** A seeded random set of notes. */
+function randomNotes(seed: number, count: number): Note[] {
+  let s = seed;
+  const rand = () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
+  return Array.from({ length: count }, (_, i) => ({
+    ...note(i + 1, rand() * 360 - 180, Math.asin(rand() * 2 - 1) * (180 / Math.PI)),
+    text: 'x'.repeat(20 + Math.floor(rand() * 100)),
+  }));
+}
+
+describe.each([
+  ['1024px', { left: 131, top: 0, width: 441, height: 444 }, { width: 704 }, 192],
+  ['390px', { left: 9, top: 0, width: 340, height: 342 }, { width: 358 }, 143],
+])('lane stability over several turns at %s', (_name, box, stage, maxWidth) => {
+  const fps = 30;
+  const sets: [string, Note[]][] = [
+    ['the demo notes', DEMO.map(([lat, lon], i) => ({ ...note(i + 1, lon, lat), text: DEMO_TEXT[i] }))],
+    ...[1, 2, 3, 4, 5, 6, 7, 8].map((seed): [string, Note[]] => [`random set ${seed}`, randomNotes(seed, 6 + seed)]),
+  ];
+
+  it.each(sets)('never flaps back to a lane within the hold window, over %s', (_n, notes) => {
+    const { frames } = simulate(box, stage, maxWidth, fps, notes, 4);
+    const changes = laneChanges(frames, fps);
+    const flaps = changes.filter((c, i) => changes.slice(0, i).some((p) => p.id === c.id && p.to === c.from && p.from === c.to && c.at - p.at < 6));
+    expect(flaps).toEqual([]);
+  });
+
+  it.each(sets)('changes lane at most twice per panel appearance (out of a crowd and back), over %s', (_n, notes) => {
+    const { frames } = simulate(box, stage, maxWidth, fps, notes, 4);
+    // An appearance is a run of consecutive frames with the panel shown.
+    const lanes = new Map<number, { lane: number; changes: number }>();
+    let most = 0;
+    for (const frame of frames) {
+      for (const id of [...lanes.keys()]) if (!frame.some((x) => x.id === id)) lanes.delete(id);
+      for (const x of frame) {
+        const was = lanes.get(x.id);
+        const changes = (was?.changes ?? 0) + (was && was.lane !== x.lane ? 1 : 0);
+        lanes.set(x.id, { lane: x.lane, changes });
+        most = Math.max(most, changes);
+      }
+    }
+    expect(most).toBeLessThanOrEqual(2);
   });
 });
 
