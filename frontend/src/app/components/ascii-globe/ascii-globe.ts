@@ -13,7 +13,7 @@ import {
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CONSTELLATION_LINE_COLOR, CONSTELLATION_STAR_COLOR, cellRgb, css, inkColor, MARKER_CELL, NO_CELL, SPACE_COLOR, STAR_COLOR, TINT_STEPS, tintColor, tintStep } from './globe-palette';
 import { createGlobe, markerCell, project, Spot, unproject } from './globe-renderer';
-import { assignSlots, cellCenter, advancePanels, layoutLanes, LANES, nearestEdgePoint, nearestInZone, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, placementRank, sameSlots, Slots } from './note-panels';
+import { assignSlots, cellCenter, advancePanels, layoutLanes, LANES, nearestEdgePoint, nearestInZone, outsidePlacement, PANEL_COUNT, PANEL_GAP, pinPoint, PanelState, placementRank, sameSlots, Slots } from './note-panels';
 import { MAX_NOTE_LENGTH, Note, NotesService } from './notes.service';
 import { COAST_EPSILON, DateLineWatcher, MIN_REQUEST_GAP_MS, NoteRotation } from './note-rotation';
 import { createSpace, rampChar, Space } from './space';
@@ -63,6 +63,8 @@ const MAX_SPEED = 4 * Math.PI;
 const CLICK_SLOP = 5;
 /** A press held longer than this (ms) is a drag, or a hold, not a click. */
 const CLICK_MAX_MS = 500;
+/** The id of the note being written (no saved note has it: saved ids are positive, unsaved ones negative). */
+const EDITING_ID = 0;
 /** How long (ms) a note whose panel had no clear spot waits before it is tried again. */
 const BLOCKED_RETRY_MS = 400;
 
@@ -75,6 +77,8 @@ export class AsciiGlobe {
   private readonly pre = viewChild.required<ElementRef<HTMLPreElement>>('globe');
   private readonly spaceEl = viewChild.required<ElementRef<HTMLElement>>('space');
   private readonly stage = viewChild.required<ElementRef<HTMLElement>>('stage');
+  private readonly panelsEl = viewChild.required<ElementRef<HTMLElement>>('panels');
+  private readonly linksEl = viewChild.required<ElementRef<SVGElement>>('links');
   private readonly noteInput = viewChild<ElementRef<HTMLInputElement>>('noteInput');
   private readonly notesService = inject(NotesService);
   private readonly injector = inject(Injector);
@@ -100,17 +104,25 @@ export class AsciiGlobe {
   /** Notes whose panel had no clear spot, and when (ms) they may be tried again, so they don't flicker on and off. */
   private blockedUntil = new Map<number, number>();
 
-  /** Where the visitor clicked, while the note form is open. */
+  /** Where the visitor clicked, while its note is being written. The globe holds still until it is saved or cancelled. */
   protected readonly pending = signal<Spot | null>(null);
+  /** What was typed when a save failed, so the panel can open again with it. */
+  protected readonly draft = signal('');
   private activeSlots: Slots = Array(PANEL_COUNT).fill(null);
   /** The note in each panel slot, or null when the slot is empty (and fading out). */
   protected readonly slots = signal<Slots>(this.activeSlots);
   /** The last note each slot held, so a panel keeps its text while it fades out. */
   protected readonly shown = signal<Slots>(this.activeSlots);
   protected readonly error = signal('');
+  /** Why a save failed when its panel could not open again (the pin is out of sight, or another note is being written). */
+  protected readonly notice = signal('');
 
   protected cancel() {
     this.pending.set(null);
+    this.draft.set('');
+    this.error.set('');
+    this.notice.set('');
+    this.redraw();
   }
 
   protected save(text: string) {
@@ -118,7 +130,9 @@ export class AsciiGlobe {
     text = text.trim();
     if (!spot || !text) return;
     this.pending.set(null);
+    this.draft.set('');
     this.error.set('');
+    this.notice.set('');
 
     // Show it right away; the server's copy replaces it once saved.
     const temp: Note = { id: this.nextTempId--, ...spot, text, created_at: new Date().toISOString() };
@@ -131,12 +145,32 @@ export class AsciiGlobe {
       },
       error: (err: HttpErrorResponse) => {
         this.rotation.remove(temp.id);
-        this.redraw();
-        this.error.set(
-          err.status === 429 ? 'Too many notes, try again in a bit.' : "Couldn't save that note, sorry.",
-        );
+        const message =
+          err.status === 429 ? 'Too many notes, try again in a bit.' : "Couldn't save that note, sorry.";
+        // Open the panel again with the text, but only where it can be seen: the globe kept spinning during the save,
+        // so the pin may be on the far side now, and the visitor may have started another note.
+        const visible = this.facing({ id: EDITING_ID, ...spot, text: '', created_at: '' });
+        if (!this.pending() && visible) {
+          this.pending.set(spot);
+          this.draft.set(text);
+          this.error.set(message);
+          this.focusEditor();
+        } else {
+          this.notice.set(message);
+        }
       },
     });
+  }
+
+  /** Lays out the editing panel (it is new, or has moved) and puts the cursor in its field. */
+  private focusEditor() {
+    afterNextRender(
+      () => {
+        this.redraw();
+        this.noteInput()?.nativeElement.focus();
+      },
+      { injector: this.injector },
+    );
   }
 
   private setSlots(slots: Slots) {
@@ -152,7 +186,10 @@ export class AsciiGlobe {
   private updatePanels(angle: number) {
     const now = performance.now();
     const candidates = this.rotation.current().filter((n) => (this.blockedUntil.get(n.id) ?? 0) <= now);
-    this.setSlots(assignSlots(this.activeSlots, nearestInZone(candidates, angle, TILT, this.activeSlots)));
+    const spot = this.pending();
+    // The panel being edited always has a slot of its own, so the notes shown leave one free.
+    const count = spot ? PANEL_COUNT - 1 : PANEL_COUNT;
+    this.setSlots(assignSlots(this.activeSlots, nearestInZone(candidates, angle, TILT, this.activeSlots, count)));
     const slots = this.activeSlots;
 
     const stage = this.stage().nativeElement;
@@ -164,27 +201,50 @@ export class AsciiGlobe {
       width: globeRect.width,
       height: globeRect.height,
     };
-    const panels = stage.querySelectorAll<HTMLElement>('.panel');
-    const links = stage.querySelectorAll<SVGGElement>('.link');
+    // Slot panels and links come first in their containers; the editing ones, when there are any, are the last child.
+    const panelBox = this.panelsEl().nativeElement;
+    const linkBox = this.linksEl().nativeElement;
+    const panels = Array.from(panelBox.children).slice(0, PANEL_COUNT) as HTMLElement[];
+    const links = Array.from(linkBox.children).slice(0, PANEL_COUNT) as SVGGElement[];
+    const editPanel = spot ? (panelBox.children[PANEL_COUNT] as HTMLElement | undefined) : undefined;
+    const editLink = spot ? (linkBox.children[PANEL_COUNT] as SVGGElement | undefined) : undefined;
     // Active panels first, so a fading one never pushes a live one aside, and panels already
     // showing before newcomers, so a newcomer fits around them instead of shoving them. Panels
     // fading out keep following their dot until they are gone.
-    const items = this.shown()
-      .map((note, i) => ({ i, note, active: !!slots[i], end: note && markerCell(note, angle, TILT, COLS, ROWS) }))
-      .flatMap((item) => (item.end && item.note ? [{ ...item, id: item.note.id, end: cellCenter(item.end, COLS, ROWS, box) }] : []))
-      .sort((a, b) => Number(b.active) - Number(a.active) || placementRank(this.panelPositions, a.id) - placementRank(this.panelPositions, b.id));
+    const editNote: Note | null = spot ? { id: EDITING_ID, ...spot, text: '', created_at: '' } : null;
+    const editEnd = editNote && markerCell(editNote, angle, TILT, COLS, ROWS);
+    // The panel being edited is placed first, so no note's panel takes its lane.
+    const items = [
+      ...(editNote && editEnd && editPanel && editLink
+        ? [{ el: editPanel, link: editLink, note: editNote, active: true, editing: true, id: EDITING_ID, end: cellCenter(editEnd, COLS, ROWS, box) }]
+        : []),
+      ...this.shown()
+        .map((note, i) => ({ el: panels[i], link: links[i], note, active: !!slots[i], editing: false, end: note && markerCell(note, angle, TILT, COLS, ROWS) }))
+        .flatMap((item) => (item.end && item.note ? [{ ...item, id: item.note.id, end: cellCenter(item.end, COLS, ROWS, box) }] : []))
+        .sort((a, b) => Number(b.active) - Number(a.active) || placementRank(this.panelPositions, a.id) - placementRank(this.panelPositions, b.id)),
+    ];
+    // The editing panel shows only while its pin is on the visible side.
+    editPanel?.classList.toggle('active', items.some((item) => item.editing));
+    editLink?.classList.toggle('active', items.some((item) => item.editing));
     // Panels are placed by where the dot truly is, not the character cell it is drawn in, whose
     // position steps a whole row at a time. Only the line ends on the drawn cell.
     const pins = items.map((item) => pinPoint(project(item.note!, angle, TILT), box));
     const laneTops = LANES.map((lane) => box.top + lane.top * box.height);
     const targets = layoutLanes(
-      items.map((item, n) => ({ pin: pins[n], size: { width: panels[item.i].offsetWidth, height: panels[item.i].offsetHeight }, lat: item.note!.lat })),
+      items.map((item, n) => ({ pin: pins[n], size: { width: item.el.offsetWidth, height: item.el.offsetHeight }, lat: item.note!.lat })),
       laneTops,
       { width: stageRect.width },
       items.map((item) => this.panelPositions.get(item.id)),
       PANEL_GAP,
       now / 1000,
     );
+    // With no lane clear (a narrow screen), the editing panel goes above or below the globe, which always has room.
+    items.forEach((item, n) => {
+      if (item.editing && targets[n].blocked) {
+        const size = { width: item.el.offsetWidth, height: item.el.offsetHeight };
+        targets[n] = { ...targets[n], rect: outsidePlacement(pins[n], size, box, { width: stageRect.width }), key: 'outside', blocked: false };
+      }
+    });
     const dt = Math.min(now - this.lastPanelTime, 100) / 1000;
     this.lastPanelTime = now;
     // With reduced motion, panels stay exactly on their targets instead of easing.
@@ -197,11 +257,11 @@ export class AsciiGlobe {
     }
     this.panelPositions = advancePanels(this.panelPositions, items.map((item) => item.id), targets, dt, snap);
     const rects = items.map((item) => this.panelPositions.get(item.id)!.rect);
-    items.forEach(({ i, end }, n) => {
+    items.forEach(({ el, link, end }, n) => {
       const rect = rects[n];
       const start = nearestEdgePoint(rect, end);
-      panels[i].style.transform = `translate(${rect.left}px, ${rect.top}px)`;
-      const [line, dot] = [links[i].firstElementChild!, links[i].lastElementChild!];
+      el.style.transform = `translate(${rect.left}px, ${rect.top}px)`;
+      const [line, dot] = [link.firstElementChild!, link.lastElementChild!];
       line.setAttribute('x1', String(start.x));
       line.setAttribute('y1', String(start.y));
       line.setAttribute('x2', String(end.x));
@@ -374,9 +434,10 @@ export class AsciiGlobe {
       const shownCodes = new Uint8Array(COLS * ROWS).fill(NO_CELL);
       const colorOf = new Map<number, string>();
       const draw = () => {
+        const spot = this.pending();
         // A note appears or goes only as its spot crosses the globe's edge.
         this.rotation.update(this.facing);
-        const frame = render(angle, this.rotation.markers());
+        const frame = render(angle, spot ? [...this.rotation.markers(), spot] : this.rotation.markers());
         for (let i = 0; i < cells.length; i++) {
           const char = frame.chars[i + Math.floor(i / COLS)];
           const code = frame.colors[i];
@@ -477,8 +538,11 @@ export class AsciiGlobe {
             const spot = unproject(x, y, angle, TILT);
             if (spot) {
               this.error.set('');
+    this.notice.set('');
               this.pending.set(spot);
-              afterNextRender(() => this.noteInput()?.nativeElement.focus(), { injector: this.injector });
+              // The globe stops now, whatever it was doing.
+              velocity = 0;
+              this.focusEditor();
             }
           }
         }
@@ -511,7 +575,11 @@ export class AsciiGlobe {
         // Clamp the step so resuming after a long pause doesn't jump.
         const dt = Math.min(now - last, 100) / 1000;
         last = now;
-        if (!dragging) {
+        if (this.pending()) {
+          // Held still while a note is written; the panels still settle.
+          velocity = 0;
+          if (!dragging) draw();
+        } else if (!dragging) {
           velocity = SPIN_SPEED + (velocity - SPIN_SPEED) * Math.exp(-dt / MOMENTUM_DECAY);
           angle += dt * velocity;
           // Only the globe's own spin, not a drag or a flick's coast, counts toward a new set.

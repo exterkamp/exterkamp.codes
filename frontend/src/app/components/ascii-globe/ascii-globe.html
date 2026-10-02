@@ -4,35 +4,44 @@
   <!-- Note text is user-supplied: only ever bound as text, never as HTML. -->
   <pre #globe class="globe" aria-hidden="true"></pre>
 
-  <div class="panels">
+  <div #panels class="panels">
     @for (note of shown(); track $index) {
-      <p class="panel" [class.active]="slots()[$index]">{{ note?.text }}</p>
+      <p class="panel slot" [class.active]="slots()[$index]">{{ note?.text }}</p>
+    }
+    @if (pending(); as spot) {
+      <!-- The note being written, pinned where the visitor clicked. Moved with the other panels, but it takes clicks. -->
+      <form class="panel editing" (submit)="$event.preventDefault(); save(noteInput.value)" (keydown.escape)="cancel()">
+        <label>
+          Leave a note here ({{ spot.lat.toFixed(1) }}°, {{ spot.lon.toFixed(1) }}°)
+          <input #noteInput type="text" [maxLength]="maxLength" [value]="draft()" autocomplete="off" required />
+        </label>
+        @if (error()) {
+          <p class="note-error" role="alert">{{ error() }}</p>
+        }
+        <div class="actions">
+          <button type="submit">Save</button>
+          <button type="button" (click)="cancel()">Cancel</button>
+        </div>
+      </form>
     }
   </div>
 
-  <svg class="links" aria-hidden="true">
+  @if (notice()) {
+    <p class="note-error notice" role="alert">{{ notice() }}</p>
+  }
+
+  <svg #links class="links" aria-hidden="true">
     @for (note of shown(); track $index) {
-      <g class="link" [class.active]="slots()[$index]">
+      <g class="link slot" [class.active]="slots()[$index]">
+        <line />
+        <circle r="4" />
+      </g>
+    }
+    @if (pending()) {
+      <g class="link editing">
         <line />
         <circle r="4" />
       </g>
     }
   </svg>
-</div>
-
-<div class="notes">
-  @if (pending(); as spot) {
-    <form class="note-form" (submit)="$event.preventDefault(); save(noteInput.value)" (keydown.escape)="cancel()">
-      <label>
-        Leave a note here ({{ spot.lat.toFixed(1) }}°, {{ spot.lon.toFixed(1) }}°)
-        <input #noteInput type="text" [maxLength]="maxLength" autocomplete="off" required />
-      </label>
-      <button type="submit">Save</button>
-      <button type="button" (click)="cancel()">Cancel</button>
-    </form>
-  }
-
-  @if (error()) {
-    <p class="note-error" role="alert">{{ error() }}</p>
-  }
 </div>

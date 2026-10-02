@@ -175,6 +175,53 @@
   }
 }
 
+// The panel being written takes clicks and keys, unlike the others.
+.panel.editing {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  width: min(13rem, 55%);
+  max-width: none;
+  pointer-events: none;
+
+  &.active {
+    pointer-events: auto;
+  }
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    font: inherit;
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.375rem;
+  }
+
+  button {
+    font: inherit;
+  }
+}
+
+.note-error {
+  margin: 0;
+  color: rgb(241, 16, 16);
+}
+
+// A failed save whose panel could not open again, shown under the globe where it is always in view.
+.notice {
+  position: relative;
+  text-align: center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .panel,
   .link {
@@ -196,39 +243,4 @@
   &.dragging {
     cursor: grabbing;
   }
-}
-
-.notes {
-  margin-top: 0.75rem;
-  max-width: 100%;
-  text-align: center;
-}
-
-.note-form {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: end;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  input {
-    width: min(22rem, 100%);
-    font: inherit;
-  }
-
-  button {
-    font: inherit;
-  }
-}
-
-.note-error {
-  margin: 0.5rem 0 0;
-  color: rgb(241, 16, 16);
 }

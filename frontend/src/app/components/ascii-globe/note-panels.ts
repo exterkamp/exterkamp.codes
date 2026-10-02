@@ -295,6 +295,26 @@ export function placementRank(previous: ReadonlyMap<number, unknown>, id: number
   return rank < 0 ? Infinity : rank;
 }
 
+/**
+ * A spot for a panel that fits in no lane: above the globe when its pin is in the top half, below otherwise,
+ * centered on the pin as far as `bounds` allows.
+ */
+export function outsidePlacement(
+  pin: { x: number; y: number },
+  size: { width: number; height: number },
+  box: Rect,
+  bounds: { width: number },
+  gap = PANEL_GAP / 2,
+): Rect {
+  const above = pin.y < box.top + box.height / 2;
+  return {
+    left: Math.max(0, Math.min(pin.x - size.width / 2, bounds.width - size.width)),
+    top: above ? box.top - size.height - gap : box.top + box.height + gap,
+    width: size.width,
+    height: size.height,
+  };
+}
+
 /** Where a spot at view-space (x right, y up) is, in the same pixels as `cellCenter`, but not snapped to a character cell. */
 export function pinPoint(
   p: { x: number; y: number },

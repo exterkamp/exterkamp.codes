@@ -15,6 +15,7 @@ import {
   placementRank,
   nearestEdgePoint,
   nearestInZone,
+  outsidePlacement,
   PANEL_GAP,
   PANEL_MAX_SPEED,
   PANEL_TAU,
@@ -519,5 +520,23 @@ describe('panels with reduced motion', () => {
     const prev = new Map<number, PanelState>([[1, { rect: { left: 0, top: 0, width: 10, height: 10 }, target: { left: 0, top: 0, width: 10, height: 10 }, key: '1:1' }]]);
     const rect = { left: 90, top: 5, width: 10, height: 10 };
     expect(advancePanels(prev, [1], [{ rect, key: '1:1' }], 0.016, true).get(1)!.rect).toEqual(rect);
+  });
+});
+
+describe('outsidePlacement', () => {
+  const box = { left: 20, top: 100, width: 300, height: 180 };
+  const size = { width: 100, height: 40 };
+
+  it('goes above the globe for a pin in its top half, centered on the pin, and below for the bottom half', () => {
+    const up = outsidePlacement({ x: 170, y: 150 }, size, box, { width: 340 });
+    expect(up.left).toBe(120);
+    expect(up.top + up.height).toBeLessThan(box.top);
+    const down = outsidePlacement({ x: 170, y: 250 }, size, box, { width: 340 });
+    expect(down.top).toBeGreaterThan(box.top + box.height);
+  });
+
+  it('stays inside the stage sideways', () => {
+    expect(outsidePlacement({ x: 5, y: 150 }, size, box, { width: 340 }).left).toBe(0);
+    expect(outsidePlacement({ x: 335, y: 150 }, size, box, { width: 340 }).left).toBe(240);
   });
 });
