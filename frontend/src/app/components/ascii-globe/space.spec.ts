@@ -192,7 +192,8 @@ describe('star motion', () => {
   it('moves almost all of the stars as twinkles', () => {
     const normal = createSpace(big);
     const normalStars = normal.glyphs.filter((g) => g !== ' ').length - normal.marks.filter((m) => m.kind.startsWith('constellation')).length;
-    expect(motion(normal).length / normalStars).toBeGreaterThan(TWINKLE_SHARE - 0.1);
+    expect(motion(normal).length / normalStars).toBeGreaterThan(0.8);
+    expect(TWINKLE_SHARE).toBeGreaterThanOrEqual(0.8);
     expect(motion(normal).length).toBeLessThanOrEqual(MAX_ANIMATED);
   });
 

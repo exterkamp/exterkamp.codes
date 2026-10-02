@@ -67,7 +67,7 @@
   }
 }
 
-// Faint dot to bright four-spoked star and back, as the glyphs of STAR_GLYPHS in order; mostly dim, so it reads as flicker.
+// Faint dot to bright four-spoked star and back, as the glyphs of STAR_GLYPHS in order; it rests on the dot about a third of the cycle, so it reads as flicker.
 @keyframes star-twinkle {
   0%,
   96%,

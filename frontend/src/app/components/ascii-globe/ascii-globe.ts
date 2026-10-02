@@ -237,7 +237,7 @@ export class AsciiGlobe {
    * Draws the dark space as a band as wide as the page. It is built once: the same grain and stars on every frame, so it
    * is only rebuilt when the page width changes. The top and bottom fades are spans per run of cells; the solid middle
    * is one element with a CSS background, holding the stars as text. Stars that twinkle and the constellations
-   * are spans in it; CSS animates them (opacity and transform only), so the script does nothing per frame.
+   * are spans in it; CSS animates them (the character only), so the script does nothing per frame.
    */
   private drawSpace(el: HTMLElement) {
     const width = this.viewportWidth();
